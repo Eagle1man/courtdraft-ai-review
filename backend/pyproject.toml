@@ -19,7 +19,12 @@ dependencies = [
     # db
     "sqlalchemy[asyncio]>=2.0.36",
     "alembic>=1.14",
+    # asyncpg — для PostgreSQL (runtime, RTX 3050)
     "asyncpg>=0.30",
+    # aiosqlite — для MOCK-режима на машине без PostgreSQL.
+    # На DEV-машине PostgreSQL не установлен, а Docker недоступен,
+    # поэтому разработка и тесты идут на SQLite. Код при этом один.
+    "aiosqlite>=0.20",
     # vector
     "qdrant-client>=1.12",
     # orchestration

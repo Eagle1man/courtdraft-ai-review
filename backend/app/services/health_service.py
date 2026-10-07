@@ -14,6 +14,7 @@ import sys
 from datetime import UTC, datetime
 
 from app.config import AppEnv, Settings, get_settings
+from app.db.session import describe_url, is_sqlite
 from app.embeddings import build_embedding_provider
 from app.llm import build_llm_provider
 from app.schemas.health import (
@@ -149,30 +150,35 @@ async def _check_qdrant(cfg: Settings) -> ComponentHealth:
     )
 
 
-async def _check_postgres(cfg: Settings) -> ComponentHealth:
-    """Состояние PostgreSQL.
+async def _check_database(cfg: Settings) -> ComponentHealth:
+    """Состояние БД.
 
-    Проверяется TCP-соединением: полноценная проверка требует драйвера,
-    а на этапе Фазы 2 БД ещё не подключена.
+    Проверяется реальным запросом через драйвер, а не TCP-портом:
+    открытый порт не означает рабочую базу. Имя компонента отражает
+    фактический диалект, чтобы не вводить в заблуждение.
     """
-    host, port = cfg.postgres_host, cfg.postgres_port
-    try:
-        _, writer = await asyncio.wait_for(
-            asyncio.open_connection(host, port),
-            timeout=2.0,
-        )
-        writer.close()
-        await writer.wait_closed()
-    except (TimeoutError, OSError):
+    from app.services.case_service import db
+
+    if not db.available:
         return ComponentHealth(
-            name="PostgreSQL",
+            name="Database",
             state=ComponentState.UNAVAILABLE,
-            detail=f"нет соединения с {host}:{port}",
+            detail="не инициализирована; проверьте DATABASE_URL в .env",
         )
+
+    alive = await db.ping()
+    if not alive:
+        return ComponentHealth(
+            name="Database",
+            state=ComponentState.UNAVAILABLE,
+            detail=f"нет ответа от БД ({db.url})",
+        )
+
+    engine_name = "SQLite (MOCK-режим)" if is_sqlite(db.url) else "PostgreSQL"
     return ComponentHealth(
-        name="PostgreSQL",
+        name="Database",
         state=ComponentState.OK,
-        detail=f"{host}:{port}",
+        detail=f"{engine_name}: {describe_url(db.url)}",
     )
 
 
@@ -200,7 +206,7 @@ async def build_health(settings: Settings | None = None) -> HealthResponse:
     components = list(_base_components(cfg))
     # Проверки независимы — выполняем параллельно, но с общим таймаутом.
     checks = await asyncio.gather(
-        _check_postgres(cfg),
+        _check_database(cfg),
         _check_qdrant(cfg),
         _check_llm(cfg),
         _check_ollama(cfg),

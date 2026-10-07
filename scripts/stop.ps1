@@ -15,16 +15,19 @@ Write-Step 'CourtDraft AI — остановка'
 $stopped = 0
 
 if (Test-PortInUse 8000) {
-    $pids = @(Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction SilentlyContinue |
-              Select-Object -ExpandProperty OwningProcess -Unique)
-    foreach ($pid in $pids) {
-        if ($pid -and $pid -ne 0) {
+    # ВНИМАНИЕ: переменная называется $processId, а не $pid —
+    # $pid в PowerShell встроенная и только для чтения, присваивание
+    # в неё падает с "VariableNotWritable".
+    $processIds = @(Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction SilentlyContinue |
+                    Select-Object -ExpandProperty OwningProcess -Unique)
+    foreach ($processId in $processIds) {
+        if ($processId -and $processId -ne 0) {
             try {
-                Stop-Process -Id $pid -Force -ErrorAction Stop
+                Stop-Process -Id $processId -Force -ErrorAction Stop
                 $stopped++
-                Write-Ok "Остановлен процесс backend (PID $pid)"
+                Write-Ok "Остановлен процесс backend (PID $processId)"
             } catch {
-                Write-Warn "Не удалось остановить PID $pid : $($_.Exception.Message)"
+                Write-Warn "Не удалось остановить PID ${processId}: $($_.Exception.Message)"
             }
         }
     }

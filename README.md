@@ -69,22 +69,45 @@ cd courtdraft-ai
 
 **Не требуется:** GPU, Ollama, Docker, реальная модель.
 
-## Что работает сейчас (v0.1, фазы 1–2)
+## Что работает сейчас (v0.1, фазы 1–3)
 
 - репозиторий и структура проекта;
 - конфигурация через `.env` с переключением MOCK/REAL;
 - FastAPI-приложение с `/api/health`, `/api/info`, `/api/ready`;
 - `LLMProvider`: `MockLLMProvider` + `OllamaProvider`;
 - `EmbeddingProvider`: `MockEmbeddingProvider` + `LocalEmbeddingProvider` + деградация;
-- 65 тестов, `ruff` и `mypy --strict` зелёные;
+- 14 таблиц хранения: дела, документы, чанки с provenance, анализ,
+  evidence, проекты и версии, проверки, нормы, практика, шаблоны, аудит;
+- SQLAlchemy 2.0 async + репозитории + обратимая миграция Alembic;
+- эндпоинты `POST /api/cases`, `GET /api/cases`, `GET /api/cases/{id}`,
+  документы и участники;
+- 125 тестов, `ruff` и `mypy --strict` зелёные;
 - скрипты `install` / `start` / `stop` / `health`.
+
+### База данных
+
+Код работает и с PostgreSQL, и с SQLite — переключение одной переменной
+в `.env`. Это сделано потому, что на машине разработки PostgreSQL
+установить нельзя (нет Docker, на C: 1.2 GB), а Фазы 3–10 нужно было
+разрабатывать и тестировать сейчас.
+
+```env
+# разработка (по умолчанию, если DATABASE_URL пуст)
+DATABASE_URL=
+
+# RTX 3050
+DATABASE_URL=postgresql+asyncpg://courtdraft:courtdraft@localhost:5432/courtdraft
+```
+
+Подробности и список диалект-специфичных решений — в
+[docs/architecture.md](docs/architecture.md).
 
 ## Что дальше
 
-`docs/architecture.md` содержит разбивку по фазам 3–18:
-PostgreSQL и Alembic, Qdrant, ingestion, анализ дела, Evidence Pack,
-Draft Agent, Verification, фронтенд, редактор с версиями, MCP,
-Ollama и реальные эмбеддинги, демо, E2E.
+`docs/architecture.md` содержит разбивку по фазам 4–18:
+Qdrant, ingestion, анализ дела, Evidence Pack, Draft Agent, Verification,
+фронтенд, редактор с версиями, MCP, Ollama и реальные эмбеддинги,
+демо, E2E.
 
 ## Безопасность
 

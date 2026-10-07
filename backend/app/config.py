@@ -90,9 +90,11 @@ class Settings(BaseSettings):
     postgres_user: str = "courtdraft"
     # S105: локальные credentials для разработки, переопределяются в .env.
     postgres_password: str = "courtdraft"  # noqa: S105
-    database_url: str = (
-        "postgresql+asyncpg://courtdraft:courtdraft@localhost:5432/courtdraft"
-    )
+    # Пусто = выбирать автоматически (см. db.session.build_database_url).
+    # Раньше здесь стоял URL из .env.example, и его нельзя было отличить от
+    # «пользователь задал вручную»: приложение молча уходило в SQLite
+    # вопреки явно прописанному PostgreSQL.
+    database_url: str = ""
 
     # ── Qdrant ──────────────────────────────────────────────────────────
     qdrant_mode: QdrantMode = QdrantMode.MEMORY
@@ -116,6 +118,10 @@ class Settings(BaseSettings):
     request_timeout_sec: int = 300
 
     # ── Хранилище ───────────────────────────────────────────────────────
+    # Относительные пути разрешаются от корня репозитория, а не от текущего
+    # каталога: иначе запуск из backend/ создавал бы data/ внутри backend/
+    # (проверено 07.10.2026). В .env.example тоже стоят абсолютные пути —
+    # см. _resolve_path.
     storage_dir: Path = PROJECT_ROOT / "data" / "cases"
     documents_dir: Path = PROJECT_ROOT / "data" / "cases" / "documents"
     demo_dir: Path = PROJECT_ROOT / "data" / "demo"
@@ -132,6 +138,20 @@ class Settings(BaseSettings):
     pii_anonymize_demo: bool = True
     eval_cases: int = 20
     eval_top_k: int = 5
+
+    @field_validator(
+        "storage_dir", "documents_dir", "demo_dir", "laws_dir", "templates_dir",
+        mode="after",
+    )
+    @classmethod
+    def _resolve_paths(cls, value: Path) -> Path:
+        """Разрешить относительный путь от корня репозитория.
+
+        Без этого `STORAGE_DIR=./data/cases` из .env приводил к созданию
+        data/ внутри backend/ — файлы оказывались не там, где их ищут,
+        и пути в логах уезжали в корень диска.
+        """
+        return value if value.is_absolute() else (PROJECT_ROOT / value).resolve()
 
     @field_validator("chunk_overlap")
     @classmethod

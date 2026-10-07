@@ -19,8 +19,11 @@ from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app.api.routes import system
+from app.api.routes import cases, system
 from app.config import Settings, get_settings
+from app.db.bootstrap import ensure_schema
+from app.db.session import describe_url
+from app.services.case_service import db
 from app.services.health_service import DISCLAIMER, VERSION
 
 logging.basicConfig(
@@ -39,6 +42,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # Каталоги данных создаются при старте, а не вручную:
         # отсутствие каталога не должно быть причиной падения.
         cfg.ensure_dirs()
+
+        # БД подключается мягко: её недоступность переводит систему в
+        # degraded-режим, но не мешает подняться (подход п.53).
+        # Настройки передаются явно: db.connect() иначе взял бы глобальный
+        # .env, а приложение может быть собрано с другой конфигурацией.
+        if await db.connect(cfg):
+            await ensure_schema()
+            logger.info("БД подключена: %s", describe_url(db.url))
+        else:
+            logger.warning(
+                "БД недоступна. Система работает без эндпоинтов дел. "
+                "Проверьте DATABASE_URL в .env"
+            )
+
         logger.info(
             "CourtDraft AI %s стартует: env=%s llm=%s embeddings=%s",
             VERSION,
@@ -49,6 +66,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if not cfg.is_real_mode:
             logger.info("MOCK-режим: реальная LLM не вызывается (это штатно для разработки)")
         yield
+        await db.disconnect()
         logger.info("CourtDraft AI остановлен")
 
     app = FastAPI(
@@ -77,6 +95,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
 
     app.include_router(system.router)
+    app.include_router(cases.router)
 
     @app.get("/", include_in_schema=False)
     async def root() -> dict[str, str]:
