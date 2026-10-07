@@ -1,0 +1,93 @@
+apiVersion: "3.9"
+
+# ВНИМАНИЕ: compose НЕ используется на машине разработки.
+#
+# На ноутбуке 8 GB Docker недоступен (клиент 2019 года, демон не отвечает,
+# WSL2 сломан). Там всё запускается нативно: см. scripts/install.ps1.
+#
+# Этот файл нужен для машины с RTX 3050 и для развёртывания в целом.
+# Проверка синтаксиса: docker compose config
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: courtdraft-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-courtdraft}
+      POSTGRES_USER: ${POSTGRES_USER:-courtdraft}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-courtdraft}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    # Ограничение памяти: контейнеры не должны съедать ОЗУ ноутбука.
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+  qdrant:
+    image: qdrant/qdrant:v1.12.4
+    container_name: courtdraft-qdrant
+    restart: unless-stopped
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: courtdraft-backend
+    restart: unless-stopped
+    depends_on:
+      - postgres
+      - qdrant
+    ports:
+      - "8000:8000"
+    environment:
+      # К контейнерам обращаемся по именам сервисов, не по localhost.
+      POSTGRES_HOST: postgres
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-courtdraft}:${POSTGRES_PASSWORD:-courtdraft}@postgres:5432/${POSTGRES_DB:-courtdraft}
+      QDRANT_MODE: server
+      QDRANT_URL: http://qdrant:6333
+      # Ollama живёт на ХОСТЕ (RTX 3050), поэтому host.docker.internal.
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      LLM_PROVIDER: ${LLM_PROVIDER:-mock}
+      EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-mock}
+      OLLAMA_ENABLED: ${OLLAMA_ENABLED:-false}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3.5:4b}
+      STORAGE_DIR: /data/cases
+      DOCUMENTS_DIR: /data/cases/documents
+    volumes:
+      - ./data:/data
+    extra_hosts:
+      # Нужен, чтобы host.docker.internal работал и в Docker Engine на Windows.
+      - "host.docker.internal:host-gateway"
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: courtdraft-frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "3000:80"
+    environment:
+      VITE_API_URL: http://localhost:8000
+
+volumes:
+  postgres_data:
+  qdrant_data:
+
+# Ollama намеренно НЕ включён в compose: он работает на хосте с GPU
+# и управляется отдельно (ollama serve / ollama pull).

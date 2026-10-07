@@ -1,0 +1,72 @@
+# ── Python ────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.venv/
+venv/
+env/
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# ── Тесты и покрытие ──────────────────────────────────────────────────────
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+
+# ── Логи ──────────────────────────────────────────────────────────────────
+*.log
+logs/
+.logs/
+*.out.log
+*.err.log
+
+# ── Конфигурация (п.44, п.61: секреты не в репозитории) ───────────────────
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# ── Данные и документы дел ────────────────────────────────────────────────
+# Материалы дел не должны попадать в репозиторий: это персональные данные.
+data/cases/
+!data/cases/.gitkeep
+data/demo/generated/
+uploads/
+*.pdf
+*.docx
+*.sqlite
+*.db
+*.db-wal
+*.db-shm
+
+# ── Frontend ──────────────────────────────────────────────────────────────
+node_modules/
+frontend/dist/
+frontend/.vite/
+frontend/coverage/
+frontend/test-results/
+frontend/playwright-report/
+npm-debug.log*
+yarn-error.log*
+
+# ── IDE и ОС ──────────────────────────────────────────────────────────────
+.vscode/
+!.vscode/extensions.json
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── Прочее ────────────────────────────────────────────────────────────────
+*.tmp
+*.bak
+.qmd/
+.claude/settings.local.json
