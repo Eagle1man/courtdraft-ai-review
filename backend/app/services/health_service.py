@@ -13,7 +13,7 @@ import platform
 import sys
 from datetime import UTC, datetime
 
-from app.config import AppEnv, Settings, get_settings
+from app.config import AppEnv, QdrantMode, Settings, get_settings
 from app.db.session import describe_url, is_sqlite
 from app.embeddings import build_embedding_provider
 from app.llm import build_llm_provider
@@ -135,18 +135,53 @@ async def _check_embeddings(cfg: Settings) -> ComponentHealth:
 
 
 async def _check_qdrant(cfg: Settings) -> ComponentHealth:
-    """Состояние Qdrant. В режиме memory сервер не нужен."""
-    if cfg.qdrant_mode == "memory":
+    """Состояние Qdrant.
+
+    В режиме memory используется встроенный клиент qdrant-client:
+    сервер поднимать не нужно, а поддержка payload-фильтров и поиска
+    по сходству полная. Данные не переживают перезапуск — это осознанно
+    для режима разработки, не для работы.
+    """
+    from app.rag.store import VectorStore
+
+    if cfg.qdrant_mode == QdrantMode.MEMORY:
+        try:
+            store = VectorStore.from_settings(cfg)
+            alive = store.health()
+            detail = (
+                "встроенный режим (memory), сервер не требуется; "
+                "данные не переживают перезапуск"
+            )
+        except Exception as exc:  # noqa: BLE001
+            return ComponentHealth(
+                name="Qdrant",
+                state=ComponentState.MOCK,
+                detail=f"встроенный режим недоступен: {str(exc)[:120]}",
+                required=False,
+            )
+
         return ComponentHealth(
             name="Qdrant",
-            state=ComponentState.MOCK,
-            detail="встроенный режим (memory), сервер не требуется",
+            state=ComponentState.MOCK if alive else ComponentState.UNAVAILABLE,
+            detail=detail,
             required=False,
         )
+
+    # Серверный режим: недоступность здесь — уже проблема.
+    try:
+        store = VectorStore.from_settings(cfg)
+        alive = store.health()
+    except Exception as exc:  # noqa: BLE001
+        return ComponentHealth(
+            name="Qdrant",
+            state=ComponentState.UNAVAILABLE,
+            detail=f"нет соединения с {cfg.qdrant_url}: {str(exc)[:100]}",
+        )
+
     return ComponentHealth(
         name="Qdrant",
-        state=ComponentState.OK,
-        detail=f"проверка {cfg.qdrant_url}",
+        state=ComponentState.OK if alive else ComponentState.UNAVAILABLE,
+        detail=cfg.qdrant_url if alive else f"нет ответа от {cfg.qdrant_url}",
     )
 
 
