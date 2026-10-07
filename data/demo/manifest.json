@@ -1,0 +1,48 @@
+{
+  "warning": "SYNTHETIC DEMO DATA — НЕ РЕАЛЬНОЕ СУДЕБНОЕ ДЕЛО",
+  "case_number": "DEMO-001",
+  "court": "Демонстрационный районный суд г. Образцова",
+  "category": "договорные споры",
+  "hearing_date": "8 сентября 2026 года",
+  "plaintiff": "Образцов Пётр Петрович",
+  "defendant": "Фирма «Вымышленная Строй»",
+  "claim_amount": 150000,
+  "documents": [
+    {
+      "filename": "01_claim.txt",
+      "title": "ИСКОВОЕ ЗАЯВЛЕНИЕ о взыскании задолженности",
+      "document_type": "CLAIM",
+      "characters": 1682
+    },
+    {
+      "filename": "02_response.txt",
+      "title": "ОТЗЫВ на исковое заявление",
+      "document_type": "RESPONSE",
+      "characters": 998
+    },
+    {
+      "filename": "03_contract.txt",
+      "title": "ДОГОВОР ПОСТАВКИ",
+      "document_type": "CONTRACT",
+      "characters": 1871
+    },
+    {
+      "filename": "04_receipt.txt",
+      "title": "ПЛАТЁЖНОЕ ПОРУЧЕНИЕ",
+      "document_type": "RECEIPT",
+      "characters": 517
+    },
+    {
+      "filename": "05_protocol.txt",
+      "title": "ПРОТОКОЛ СУДЕБНОГО ЗАСЕДАНИЯ",
+      "document_type": "PROTOCOL",
+      "characters": 1229
+    },
+    {
+      "filename": "06_expert_opinion.txt",
+      "title": "ЗАКЛЮЧЕНИЕ СУДЕБНОЙ ЭКСПЕРТИЗЫ",
+      "document_type": "EXPERT_OPINION",
+      "characters": 1174
+    }
+  ]
+}
