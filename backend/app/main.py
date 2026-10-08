@@ -14,14 +14,16 @@ from __future__ import annotations
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from typing import Any
 
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 
-from app.api.routes import cases, drafts, system
+from app.api.routes import cases, demo, drafts, system
 from app.config import Settings, get_settings
-from app.db.bootstrap import ensure_schema
+from app.db.bootstrap import MIGRATE_HINT, check_schema_drift, ensure_schema
 from app.db.session import describe_url
 from app.services.case_service import db
 from app.services.health_service import DISCLAIMER, VERSION
@@ -50,6 +52,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if await db.connect(cfg):
             await ensure_schema()
             logger.info("БД подключена: %s", describe_url(db.url))
+
+            missing = await check_schema_drift()
+            if missing:
+                # Рассинхрон обнаружен здесь, а не в середине фоновой
+                # задачи: сообщение в логе читается сразу, а не спустя
+                # три минуты после нажатия кнопки.
+                logger.error(
+                    "Схема БД отстаёт от моделей: нет колонок %s\n%s",
+                    ", ".join(missing),
+                    MIGRATE_HINT,
+                )
         else:
             logger.warning(
                 "БД недоступна. Система работает без эндпоинтов дел. "
@@ -97,16 +110,51 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(system.router)
     app.include_router(cases.router)
     app.include_router(drafts.router)
+    app.include_router(demo.router)
 
-    @app.get("/", include_in_schema=False)
-    async def root() -> dict[str, str]:
-        """Корень: указать, где документация."""
-        return {
+    @app.get("/api", include_in_schema=False)
+    async def api_root() -> dict[str, str]:
+        """Корень API: указать, где документацию и интерфейс."""
+        info: dict[str, str] = {
             "name": "CourtDraft AI",
             "version": VERSION,
             "docs": "/docs",
             "health": "/api/health",
         }
+        if cfg.frontend_available:
+            info["ui"] = "/app"
+        return info
+
+    @app.get("/", include_in_schema=False)
+    async def root() -> Any:
+        """Корень: открыть интерфейс, а если его нет — показать адреса.
+
+        Человек, запустивший сервис, идёт по адресу без всякого /app:
+        заставлять его угадывать путь к интерфейсу незачем.
+        """
+        if cfg.frontend_available:
+            return RedirectResponse(url="/app")
+        return {
+            "name": "CourtDraft AI",
+            "version": VERSION,
+            "docs": "/docs",
+            "health": "/api/health",
+            "note": "Веб-интерфейс не собран. API доступен по /api.",
+        }
+
+    if cfg.frontend_available:
+        # Интерфейс раздаётся тем же приложением: один порт, один
+        # источник происхождения, никакого CORS и отдельного сервера.
+        app.mount(
+            "/app",
+            StaticFiles(directory=str(cfg.frontend_dir), html=True),
+            name="ui",
+        )
+    else:
+        logger.warning(
+            "Веб-интерфейс не найден в %s. API работает, интерфейс недоступен.",
+            cfg.frontend_dir,
+        )
 
     @app.exception_handler(Exception)
     async def unhandled_exception(request: Request, exc: Exception) -> JSONResponse:

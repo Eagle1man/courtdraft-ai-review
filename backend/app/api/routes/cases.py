@@ -207,8 +207,10 @@ async def register_document(
 
     sha256 = hashlib.sha256(payload.text.encode("utf-8")).hexdigest()
 
-    existing = await service.documents.find_by_sha256(sha256)
-    if existing is not None and existing.case_id == case_id:
+    # Дубль ищется внутри дела: тот же документ в другом деле — не дубль,
+    # а обычное дело (типовой иск встречается в десятках производств).
+    existing = await service.documents.find_by_sha256(sha256, case_id=case_id)
+    if existing is not None:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Документ с таким содержимым уже загружен: {existing.filename}",

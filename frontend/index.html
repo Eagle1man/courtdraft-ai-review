@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CourtDraft — проект судебного решения</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<!--
+  Интерфейс помощника судьи.
+
+  Главное правило продукта вынесено в шапку и повторяется у каждого блока
+  с текстом акта: система готовит ПРОЕКТ, решение принимает человек.
+  Это не украшение — без повторного напоминания текст модели легко принять
+  за готовый акт.
+-->
+
+<header class="top">
+  <div class="wrap">
+    <div class="brand">
+      <span class="mark">⚖</span>
+      <div>
+        <h1>CourtDraft</h1>
+        <p class="sub">Подготовка проекта судебного решения по материалам дела</p>
+      </div>
+    </div>
+    <div class="status" id="health">проверка связи…</div>
+  </div>
+</header>
+
+<div class="notice" id="disclaimer">
+  <strong>Это проект, а не решение суда.</strong>
+  Проверка и принятие решения — за судьёй. Любое утверждение без ссылки
+  на материалы дела помечено как требующее проверки.
+</div>
+
+<main class="wrap layout">
+
+  <!-- ── Список дел ─────────────────────────────────────── -->
+  <aside class="panel">
+    <h2>Дела</h2>
+    <button class="btn primary full" id="btn-new-case">Создать демо-дело</button>
+    <ul class="case-list" id="case-list">
+      <li class="muted">Загрузка…</li>
+    </ul>
+
+    <h2 class="mt">Материалы дела</h2>
+    <ul class="doc-list" id="doc-list">
+      <li class="muted">Дело не выбрано</li>
+    </ul>
+  </aside>
+
+  <!-- ── Проект ─────────────────────────────────────────── -->
+  <section class="panel main">
+
+    <div class="head-row">
+      <div>
+        <h2 id="draft-title">Проект не сформирован</h2>
+        <p class="muted" id="draft-meta">Выберите дело и нажмите «Сформировать проект».</p>
+      </div>
+      <button class="btn primary" id="btn-generate" disabled>
+        Сформировать проект
+      </button>
+    </div>
+
+    <div class="progress" id="progress" hidden>
+      <div class="bar"><div class="fill" id="progress-fill"></div></div>
+      <p class="muted" id="progress-text">Формирование…</p>
+    </div>
+
+    <div class="alert" id="alert" hidden></div>
+
+    <!-- Результат проверки -->
+    <div class="verification" id="verification" hidden>
+      <h3>Проверка проекта</h3>
+      <div class="verdict" id="verdict"></div>
+      <ul class="issues" id="issues"></ul>
+    </div>
+
+    <!-- Разделы проекта -->
+    <div class="sections" id="sections">
+      <p class="muted">Разделы проекта появятся здесь.</p>
+    </div>
+
+    <!-- Источники -->
+    <details class="sources" id="sources" hidden>
+      <summary>Источники, использованные в проекте</summary>
+      <ul id="source-list"></ul>
+    </details>
+
+    <!-- Версии -->
+    <details class="versions" id="versions" hidden>
+      <summary>История версий</summary>
+      <ul id="version-list"></ul>
+    </details>
+
+    <!-- Правка -->
+    <details class="editor" id="editor" hidden>
+      <summary>Внести правку вручную</summary>
+      <p class="muted small">
+        Текст сохраняется целиком как новая версия. Предыдущая версия
+        остаётся без изменений — так юридический акт можно показать
+        в том виде, в каком он был принят.
+      </p>
+      <select id="edit-author">
+        <option value="secretary">Правку внёс секретарь</option>
+        <option value="judge">Правку внёс судья</option>
+      </select>
+      <input type="text" id="edit-comment" placeholder="Комментарий к правке">
+      <textarea id="edit-text" rows="10"></textarea>
+      <button class="btn" id="btn-save-edit">Сохранить как новую версию</button>
+    </details>
+
+  </section>
+</main>
+
+<footer class="wrap foot">
+  Все данные и модели работают локально. Материалы дела не покидают компьютер.
+</footer>
+
+<script src="app.js"></script>
+</body>
+</html>

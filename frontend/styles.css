@@ -1,0 +1,375 @@
+/* Интерфейс помощника судьи.
+ *
+ * Оформление подчинено одной задаче: человек должен безошибочно отличать
+ * текст, сгенерированный машиной, от проверенного и утверждённого.
+ * Поэтому пометка «требует проверки» выглядит заметно, а не как строчка
+ * в списке, а весь текст акта визуально приглушён.
+ *
+ * Без сборки: обычный CSS и ES2020, никакого npm. Для интерфейса на одну
+ * страницу сборщик — лишняя зависимость и лишний день настройки.
+ */
+
+:root {
+  --ink: #1a1a1a;
+  --muted: #6b6b6b;
+  --line: #d8d8d8;
+  --bg: #f5f5f2;
+  --panel: #ffffff;
+  --accent: #1f3864;
+  --danger: #9c0006;
+  --danger-bg: #fff0ee;
+  --warn: #8a5a00;
+  --warn-bg: #fff8e8;
+  --ok: #1c6b3c;
+  --ok-bg: #eefaf1;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  font-size: 15px;
+  line-height: 1.55;
+  color: var(--ink);
+  background: var(--bg);
+}
+
+.wrap { max-width: 1180px; margin: 0 auto; padding: 0 20px; }
+
+/* ── Шапка ─────────────────────────────────────────────────────── */
+
+.top {
+  background: var(--accent);
+  color: #fff;
+  padding: 16px 0;
+}
+
+.top .wrap { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+
+.brand { display: flex; align-items: center; gap: 14px; }
+
+.brand .mark { font-size: 30px; }
+
+.brand h1 { margin: 0; font-size: 21px; letter-spacing: 0.3px; }
+
+.brand .sub { margin: 2px 0 0; font-size: 13px; opacity: 0.82; }
+
+.status { font-size: 13px; opacity: 0.9; text-align: right; }
+
+/* ── Предупреждение о статусе текста ──────────────────────────── */
+
+.notice {
+  background: var(--warn-bg);
+  border-bottom: 1px solid #e6d5a8;
+  padding: 11px 20px;
+  font-size: 13.5px;
+  color: #4a3a10;
+}
+
+.notice strong { color: var(--danger); }
+
+/* ── Компоновка ───────────────────────────────────────────────── */
+
+.layout {
+  display: grid;
+  grid-template-columns: 320px 1fr;
+  gap: 20px;
+  align-items: start;
+  padding-top: 20px;
+  padding-bottom: 40px;
+}
+
+@media (max-width: 860px) {
+  .layout { grid-template-columns: 1fr; }
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 18px;
+}
+
+.panel h2 {
+  margin: 0 0 12px;
+  font-size: 14px;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--muted);
+}
+
+.mt { margin-top: 22px !important; }
+
+.muted { color: var(--muted); font-size: 13.5px; }
+.small { font-size: 12.5px; }
+
+/* ── Списки ───────────────────────────────────────────────────── */
+
+.case-list, .doc-list, .issues, .sources ul, .versions ul {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+}
+
+.case-list li, .doc-list li {
+  padding: 9px 10px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.case-list li:hover, .doc-list li:hover { background: #f0f0ec; }
+
+.case-list li.active {
+  background: #eaf1f8;
+  border-color: #b9cde4;
+  font-weight: 600;
+}
+
+.doc-list li { cursor: default; font-size: 13.5px; }
+
+.doc-list .type {
+  display: inline-block;
+  min-width: 88px;
+  font-size: 11px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+/* ── Кнопки ───────────────────────────────────────────────────── */
+
+.btn {
+  font: inherit;
+  font-size: 14px;
+  padding: 9px 15px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.btn:hover:not(:disabled) { background: #f2f2ee; }
+
+.btn.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.btn.primary:hover:not(:disabled) { background: #16294a; }
+
+.btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+.btn.full { width: 100%; }
+
+.head-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.head-row h2 { margin: 0 0 4px; font-size: 17px; text-transform: none; letter-spacing: 0; color: var(--ink); }
+
+.head-row p { margin: 0; }
+
+/* ── Прогресс ─────────────────────────────────────────────────── */
+
+.progress { margin: 18px 0; }
+
+.progress .bar {
+  height: 6px;
+  background: #e6e6e2;
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.progress .fill {
+  height: 100%;
+  width: 0;
+  background: var(--accent);
+  transition: width 0.6s ease;
+}
+
+.progress .fill.busy { animation: pulse 1.6s ease-in-out infinite; }
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+.alert {
+  margin: 16px 0;
+  padding: 11px 13px;
+  border-radius: 6px;
+  font-size: 13.5px;
+  background: var(--danger-bg);
+  border: 1px solid #f0c4c0;
+  color: var(--danger);
+}
+
+.alert.ok { background: var(--ok-bg); border-color: #b9dfc6; color: var(--ok); }
+
+/* ── Проверка ─────────────────────────────────────────────────── */
+
+.verification {
+  margin: 18px 0;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfbf9;
+}
+
+.verification h3 { margin: 0 0 10px; font-size: 14px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--muted); }
+
+.verdict {
+  display: inline-block;
+  padding: 5px 11px;
+  border-radius: 4px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.verdict.review { background: var(--warn-bg); color: var(--warn); border: 1px solid #e6d5a8; }
+.verdict.pass { background: var(--ok-bg); color: var(--ok); border: 1px solid #b9dfc6; }
+
+.issues { margin-top: 12px; }
+
+.issues li {
+  padding: 9px 11px;
+  margin-bottom: 7px;
+  border-left: 3px solid var(--muted);
+  background: #fff;
+  border-radius: 0 5px 5px 0;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.issues li.CRITICAL, .issues li.HIGH { border-left-color: var(--danger); }
+.issues li.MEDIUM { border-left-color: #c98a00; }
+.issues li.LOW { border-left-color: #7a8a99; }
+
+.issues .where { display: block; font-weight: 600; margin-bottom: 2px; }
+
+.issues .why { color: #444; }
+
+.issues .quote {
+  display: block;
+  margin-top: 5px;
+  padding: 5px 8px;
+  background: #f6f6f3;
+  border-radius: 4px;
+  font-size: 12.5px;
+  color: var(--muted);
+  white-space: pre-wrap;
+  max-height: 4.5em;
+  overflow: hidden;
+}
+
+/* ── Разделы проекта ──────────────────────────────────────────── */
+
+.sections { margin-top: 20px; }
+
+.section {
+  margin-bottom: 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.section > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 14px;
+  background: #f0f0ec;
+  border-bottom: 1px solid var(--line);
+}
+
+.section h4 { margin: 0; font-size: 14px; letter-spacing: 0.3px; }
+
+.section .body {
+  padding: 14px;
+  white-space: pre-wrap;
+  font-size: 14.5px;
+  line-height: 1.65;
+  color: #2c2c2c;
+}
+
+/* Раздел, помеченный как требующий проверки, виден сразу — иначе
+ * пометку прочитают только те, кто догадается посмотреть. */
+.section.flagged > header { background: var(--warn-bg); }
+
+.section.flagged { border-color: #e0c98d; }
+
+.badge {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  white-space: nowrap;
+}
+
+.badge.review { background: #f6e3b8; color: var(--warn); }
+.badge.mock { background: #e4e4e0; color: var(--muted); }
+.badge.source { background: #dfe9f3; color: var(--accent); }
+
+.citations {
+  padding: 8px 14px;
+  border-top: 1px dashed var(--line);
+  font-size: 12.5px;
+  color: var(--muted);
+  background: #fbfbf9;
+}
+
+/* ── Источники и версии ──────────────────────────────────────── */
+
+details { margin-top: 18px; }
+
+summary {
+  cursor: pointer;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--accent);
+  padding: 8px 0;
+}
+
+details ul li {
+  padding: 6px 0;
+  border-bottom: 1px solid #eee;
+  font-size: 13.5px;
+}
+
+details ul li:last-child { border-bottom: none; }
+
+.v-current { font-weight: 600; }
+
+/* ── Редактор ────────────────────────────────────────────────── */
+
+.editor textarea, .editor input, .editor select {
+  width: 100%;
+  font: inherit;
+  font-size: 13.5px;
+  padding: 9px 11px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  margin-bottom: 9px;
+  background: #fff;
+}
+
+.editor textarea {
+  font-family: "Consolas", "Courier New", monospace;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.foot {
+  padding: 18px 20px 30px;
+  font-size: 12.5px;
+  color: var(--muted);
+  border-top: 1px solid var(--line);
+}

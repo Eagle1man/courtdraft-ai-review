@@ -48,6 +48,10 @@ uploads/
 # Служебные файлы перенаправления вывода при фоновых прогонах демо
 backend/.demo*.out
 backend/.demo*.err
+backend/.ui*.out
+backend/.ui*.err
+backend/.e2e*.out
+backend/.e2e*.err
 *.sqlite
 *.db
 *.db-wal

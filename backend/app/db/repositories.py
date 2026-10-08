@@ -108,12 +108,26 @@ class DocumentRepository:
     async def get(self, document_id: uuid.UUID) -> CaseDocument | None:
         return await self._session.get(CaseDocument, document_id)
 
-    async def find_by_sha256(self, sha256: str) -> CaseDocument | None:
-        """Найти документ по хэшу — защита от загрузки дублей."""
-        result = await self._session.execute(
-            select(CaseDocument).where(CaseDocument.sha256 == sha256)
-        )
-        return result.scalar_one_or_none()
+    async def find_by_sha256(
+        self, sha256: str, *, case_id: uuid.UUID | None = None
+    ) -> CaseDocument | None:
+        """Найти документ по хэшу — защита от загрузки дублей.
+
+        Поиск ограничен делом, если оно указано. Дубль проверяется внутри
+        одного дела, а не во всей базе: один и тот же документ законно
+        встречается в разных делах (типовой иск, типовой договор), и
+        глобальный поиск делал бы вторую загрузку невозможной.
+
+        Раньше здесь стоял scalar_one_or_none() без ограничения делом:
+        при двух одинаковых документах в разных делах он выбрасывал
+        MultipleResultsFound, и загрузка падала с 500.
+        """
+        stmt = select(CaseDocument).where(CaseDocument.sha256 == sha256)
+        if case_id is not None:
+            stmt = stmt.where(CaseDocument.case_id == case_id)
+
+        result = await self._session.execute(stmt.limit(1))
+        return result.scalars().first()
 
     async def list_for_case(
         self, case_id: uuid.UUID, *, document_type: str | None = None

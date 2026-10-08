@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from httpx import ASGITransport, AsyncClient
 
@@ -20,10 +22,42 @@ async def client() -> AsyncClient:
 
 
 class TestRoot:
-    async def test_root_points_to_docs(self, client: AsyncClient) -> None:
-        response = await client.get("/")
+    async def test_root_opens_interface_when_present(self, client: AsyncClient) -> None:
+        """С интерфейсом корень ведёт на него.
+
+        Человек, запустивший сервис, идёт по адресу без всякого /app:
+        заставлять его угадывать путь незачем.
+        """
+        response = await client.get("/", follow_redirects=False)
+        assert response.status_code in {302, 307}
+        assert response.headers["location"] == "/app"
+
+    async def test_root_serves_info_without_interface(self, tmp_path: Path) -> None:
+        """Без интерфейса корень отдаёт сведения о сервисе.
+
+        Корень не должен отдавать 404 ни при каких условиях: иначе
+        непонятно, запустился сервис или нет.
+        """
+        app = create_app(
+            Settings(app_env=AppEnv.DEVELOPMENT, frontend_dir=tmp_path / "absent")
+        )
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as c:
+            response = await c.get("/")
+
         assert response.status_code == 200
         assert response.json()["docs"] == "/docs"
+
+    async def test_ui_is_served(self, client: AsyncClient) -> None:
+        """Интерфейс действительно отдаётся, а не только задекларирован."""
+        response = await client.get("/app/")
+        assert response.status_code == 200
+        assert "CourtDraft" in response.text
+
+    async def test_api_root_reports_ui_path(self, client: AsyncClient) -> None:
+        data = (await client.get("/api")).json()
+        assert data["ui"] == "/app"
+        assert data["docs"] == "/docs"
 
 
 class TestHealth:

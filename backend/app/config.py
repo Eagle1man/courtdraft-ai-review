@@ -127,6 +127,10 @@ class Settings(BaseSettings):
     demo_dir: Path = PROJECT_ROOT / "data" / "demo"
     laws_dir: Path = PROJECT_ROOT / "data" / "laws"
     templates_dir: Path = PROJECT_ROOT / "data" / "templates"
+    # Каталог веб-интерфейса. Интерфейс раздаётся тем же приложением, что и
+    # API: отдельный сервер и отдельный порт означали бы лишнюю настройку
+    # и проблемы с происхождением запросов (CORS) без выигрыша.
+    frontend_dir: Path = PROJECT_ROOT / "frontend"
 
     # ── CORS (п.44: только локально) ───────────────────────────────────
     # Хранится строкой, а не list[str]: pydantic-settings разбирает сложные
@@ -141,6 +145,7 @@ class Settings(BaseSettings):
 
     @field_validator(
         "storage_dir", "documents_dir", "demo_dir", "laws_dir", "templates_dir",
+        "frontend_dir",
         mode="after",
     )
     @classmethod
@@ -185,7 +190,11 @@ class Settings(BaseSettings):
         return self.max_upload_mb * 1024 * 1024
 
     def ensure_dirs(self) -> None:
-        """Создать каталоги данных. Вызывается при старте приложения."""
+        """Создать каталоги данных. Вызывается при старте приложения.
+
+        Каталог интерфейса не создаётся: он поставляется с репозиторием, и
+        его отсутствие — это повреждённая поставка, а не состояние данных.
+        """
         for path in (
             self.storage_dir,
             self.documents_dir,
@@ -194,6 +203,15 @@ class Settings(BaseSettings):
             self.templates_dir,
         ):
             path.mkdir(parents=True, exist_ok=True)
+
+    @property
+    def frontend_available(self) -> bool:
+        """Есть ли интерфейс.
+
+        Приложение обязано работать и без него: бэкенд полезен сам по себе,
+        а отсутствие файлов в frontend/ не должно выглядеть как поломка.
+        """
+        return (self.frontend_dir / "index.html").is_file()
 
 
 @lru_cache(maxsize=1)

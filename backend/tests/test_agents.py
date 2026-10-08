@@ -185,6 +185,27 @@ class TestPostprocess:
         cleaned, _ = _postprocess(f"{line}\n{line}\n{line}", TEMPLATE["sections"][1])
         assert cleaned.count(line) == 1
 
+    def test_mock_section_is_flagged(self) -> None:
+        """Раздел от заглушки обязан быть помечен как требующий проверки.
+
+        Иначе проект в режиме mock выглядит «чистым» и притворяется
+        готовым, хотя настоящая модель не вызывалась и проверять было
+        нечего.
+        """
+        _, needs = _postprocess(
+            "[MOCK-ОТВЕТ] Реальная модель не вызывалась (режим mock). ref=12345",
+            TEMPLATE["sections"][0],
+        )
+        assert needs is True
+
+    def test_clean_model_text_not_flagged(self) -> None:
+        """Обычный текст настоящей модели не должен помечаться на автомате."""
+        _, needs = _postprocess(
+            "Суд рассмотрел гражданское дело по иску истца к ответчику.",
+            TEMPLATE["sections"][0],
+        )
+        assert needs is False
+
     def test_drops_duplicate_heading(self) -> None:
         """Модель печатает заголовок дважды — в проекте раздел уже назван."""
         cleaned, _ = _postprocess(

@@ -212,6 +212,12 @@ def _postprocess(text: str, section: dict[str, Any]) -> tuple[str, bool]:
     if NO_LAW_FOUND.split(".")[0] in cleaned:
         needs_review = True
 
+    # Раздел от заглушки нельзя пропускать как годный: настоящая модель
+    # не вызывалась, и проверить было нечего. Без этой пометки проект в
+    # режиме mock выглядел бы «чистым» — то есть притворялся бы готовым.
+    if "MOCK-ОТВЕТ" in cleaned:
+        needs_review = True
+
     # Горизонтальные разделители — оформление ответа модели, в тексте
     # проекта они не нужны: разделы разделяются заголовками.
     cleaned = re.sub(r"^\s*(?:-{3,}|_{3,}|\*{3,})\s*$", "", cleaned, flags=re.MULTILINE)

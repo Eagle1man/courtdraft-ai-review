@@ -74,3 +74,49 @@ async def ensure_schema() -> bool:
         # о ней в /api/health и продолжит работать degraded.
         logger.warning("Не удалось создать схему БД", exc_info=True)
         return False
+
+
+async def check_schema_drift() -> list[str]:
+    """Найти колонки, которых нет в базе, но есть в моделях.
+
+    Зачем: `create_all` только создаёт таблицы и никогда не меняет уже
+    существующие. База, созданная до появления нового поля, продолжает
+    работать — и падает позже, внутри фоновой задачи, сообщением
+    «no column named ...», которое ничего не объясняет.
+
+    Проверка при старте превращает это в понятное сообщение с точной
+    командой исправления.
+    """
+    engine = db.engine
+    if engine is None:
+        return []
+
+    def _inspect(sync_conn: Connection) -> list[str]:
+        inspector = inspect(sync_conn)
+        missing: list[str] = []
+
+        for table_name, table in Base.metadata.tables.items():
+            if table_name not in inspector.get_table_names():
+                # Отсутствующая таблица — не рассинхрон, её создаст Alembic.
+                continue
+            actual = {c["name"] for c in inspector.get_columns(table_name)}
+            for column in table.columns:
+                if column.name not in actual:
+                    missing.append(f"{table_name}.{column.name}")
+        return missing
+
+    try:
+        async with engine.connect() as connection:
+            return await connection.run_sync(_inspect)
+    except Exception:  # noqa: BLE001
+        logger.warning("Не удалось проверить схему БД", exc_info=True)
+        return []
+
+
+MIGRATE_HINT = (
+    "База отстаёт от моделей. Обновите её командой:\n"
+    "  python -m alembic stamp 0c875f68a577\n"
+    "  python -m alembic upgrade head\n"
+    "\n"
+    "Либо удалите файл базы и перезапустите сервис: данные будут потеряны."
+)

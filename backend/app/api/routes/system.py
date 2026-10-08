@@ -10,6 +10,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Request, Response, status
 
 from app.config import Settings, get_settings
+from app.db.bootstrap import MIGRATE_HINT, check_schema_drift
 from app.schemas.health import ApiInfoResponse, HealthResponse
 from app.services.health_service import build_health, build_info
 
@@ -43,15 +44,29 @@ async def info(cfg: Settings = Depends(settings_of)) -> ApiInfoResponse:
 
 
 @router.get("/ready", include_in_schema=False)
-async def ready(response: Response, cfg: Settings = Depends(settings_of)) -> dict[str, str]:
+async def ready(
+    response: Response, cfg: Settings = Depends(settings_of)
+) -> dict[str, object]:
     """Readiness для оркестратора.
 
     Возвращает 503, только если сломано то, что обязательно в текущем
     режиме. В режиме разработки отсутствие Ollama и эмбеддингов — не повод
     отказывать в готовности.
+
+    Рассинхрон схемы БД тоже делает сервис неготовым: писать в таблицу
+    с недостающей колонкой нельзя, и запросы будут паять по одному.
     """
     report = await build_health(cfg)
-    if report.status == "ERROR":
+    payload: dict[str, object] = {"status": report.status}
+
+    missing = await check_schema_drift()
+    if missing:
+        payload["schema_drift"] = missing
+        payload["hint"] = MIGRATE_HINT
+
+    if report.status == "ERROR" or missing:
         response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
-        return {"status": report.status}
-    return {"status": report.status}
+        if report.status != "ERROR":
+            payload["status"] = "SCHEMA_DRIFT"
+
+    return payload

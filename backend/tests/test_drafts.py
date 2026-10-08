@@ -467,6 +467,73 @@ class TestDraftEndpoints:
 # ── Согласованность перечислений ──────────────────────────────────────
 
 
+class TestDuplicateDocumentAcrossCases:
+    """Один и тот же документ в разных делах — не дубль.
+
+    Типовой иск или типовой договор законно встречается во многих
+    производствах. Раньше поиск по хэшу шёл по всей базе и выбрасывал
+    MultipleResultsFound, из-за чего загрузка падала с 500.
+    """
+
+    async def test_same_document_allowed_in_two_cases(self, session: AsyncSession) -> None:
+        from app.db.repositories import DocumentRepository
+
+        repo = DocumentRepository(session)
+        text = "Исковое заявление о взыскании 150000 руб."
+
+        import hashlib
+
+        digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+        first = await case_factory_one(session, "DUP-1")
+        second = await case_factory_one(session, "DUP-2")
+
+        await repo.add(_document(first.id, "иск.txt", "CLAIM", text))
+        await repo.add(_document(second.id, "иск.txt", "CLAIM", text))
+        await session.flush()
+
+        # Поиск с ограничением по делу обязан найти свой документ
+        # и не должен падать на наличии второго в другом деле.
+        found_first = await repo.find_by_sha256(digest, case_id=first.id)
+        found_second = await repo.find_by_sha256(digest, case_id=second.id)
+
+        assert found_first is not None
+        assert found_second is not None
+        assert found_first.case_id == first.id
+        assert found_second.case_id == second.id
+
+    async def test_duplicate_within_case_is_found(self, session: AsyncSession) -> None:
+        """Внутри одного дела дубль должен находиться — ради отказа 409."""
+        import hashlib
+
+        from app.db.repositories import DocumentRepository
+
+        repo = DocumentRepository(session)
+        text = "ПРОТОКОЛ"
+
+        case = await case_factory_one(session, "DUP-3")
+        await repo.add(_document(case.id, "p.txt", "PROTOCOL", text))
+        await session.flush()
+
+        found = await repo.find_by_sha256(
+            hashlib.sha256(text.encode("utf-8")).hexdigest(), case_id=case.id
+        )
+        assert found is not None
+
+
+async def case_factory_one(session: AsyncSession, number: str):  # noqa: ANN201
+    from app.db.repositories import CaseRepository
+
+    created = await CaseRepository(session).create(
+        case_number=number,
+        court_name="Тестовый суд",
+        case_type="civil",
+        is_synthetic=True,
+    )
+    await session.flush()
+    return created
+
+
 class TestStatusVocabulary:
     def test_draft_status_values(self) -> None:
         values = {s.value for s in DraftStatus}
