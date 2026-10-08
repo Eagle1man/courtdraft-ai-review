@@ -441,6 +441,7 @@ cd backend
 |---|---|
 | [`AGENTS.md`](AGENTS.md) | Правила работы с проектом |
 | [`docs/architecture.md`](docs/architecture.md) | Архитектура и проектные решения |
+| [`docs/report-mvp.md`](docs/report-mvp.md) | Отчёт: что сделано и план до MVP |
 | [`docs/api.md`](docs/api.md) | Описание API |
 | [`SECURITY.md`](SECURITY.md) | Безопасность и известные ограничения |
 | [`CONTRIBUTING.md`](CONTRIBUTING.md) | Как участвовать |
