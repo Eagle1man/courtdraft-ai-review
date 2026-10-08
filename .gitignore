@@ -41,6 +41,8 @@ data/demo/generated/
 uploads/
 *.pdf
 *.docx
+# Отчёт проекта в Word — служебный документ, в отличие от материалов дел
+!docs/report-mvp.docx
 
 # Служебные файлы перенаправления вывода при фоновых прогонах демо
 backend/.demo*.out
