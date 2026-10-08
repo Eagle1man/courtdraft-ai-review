@@ -438,6 +438,10 @@ class Verification(TimestampMixin, Base):
     # Сколько утверждений проверено и сколько из них без источника.
     claims_checked: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     unsupported_claims: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    # Сколько разделов проекта было проверено. Отдельно от claims_checked:
+    # при переработке проверки одно утверждение может относиться к разделу,
+    # и без этого поля нельзя сказать, охват был полным или частичным.
+    sections_checked: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
     draft: Mapped[Draft] = relationship(back_populates="verifications")
 

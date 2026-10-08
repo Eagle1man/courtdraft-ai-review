@@ -19,7 +19,7 @@ from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app.api.routes import cases, system
+from app.api.routes import cases, drafts, system
 from app.config import Settings, get_settings
 from app.db.bootstrap import ensure_schema
 from app.db.session import describe_url
@@ -96,6 +96,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app.include_router(system.router)
     app.include_router(cases.router)
+    app.include_router(drafts.router)
 
     @app.get("/", include_in_schema=False)
     async def root() -> dict[str, str]:

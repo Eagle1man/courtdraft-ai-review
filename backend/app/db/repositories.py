@@ -13,7 +13,7 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.entities import (
@@ -25,6 +25,7 @@ from app.models.entities import (
     DocumentChunk,
     Draft,
     DraftVersion,
+    EvidenceItem,
     Verification,
 )
 
@@ -265,6 +266,55 @@ class DraftRepository:
         self._session.add(verification)
         await self._session.flush()
         return verification
+
+
+class EvidenceRepository:
+    """Элементы пакета доказательств (п.26).
+
+    Пакет сохраняется, а не строится на лету при каждом запросе: к нему
+    потом привязывается проект, и без сохранённого пакета невозможно
+    объяснить, откуда взялся конкретный факт в тексте.
+    """
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def replace_for_case(
+        self, case_id: uuid.UUID, items: list[EvidenceItem]
+    ) -> int:
+        """Перезаписать пакет дела.
+
+        Прежний пакет удаляется целиком: он относится к конкретному
+        состоянию материалов, и смешивание старого и нового в одной
+        выдаче сделало бы ссылки на источники недостоверными.
+        """
+        await self._session.execute(
+            delete(EvidenceItem).where(EvidenceItem.case_id == case_id)
+        )
+        await self._session.flush()
+
+        for item in items:
+            item.case_id = case_id
+            self._session.add(item)
+        await self._session.flush()
+        return len(items)
+
+    async def count_for_case(self, case_id: uuid.UUID) -> int:
+        result = await self._session.execute(
+            select(func.count())
+            .select_from(EvidenceItem)
+            .where(EvidenceItem.case_id == case_id)
+        )
+        return int(result.scalar_one())
+
+    async def list_for_case(
+        self, case_id: uuid.UUID, *, category: str | None = None, limit: int = 200
+    ) -> list[EvidenceItem]:
+        query = select(EvidenceItem).where(EvidenceItem.case_id == case_id)
+        if category:
+            query = query.where(EvidenceItem.category == category)
+        result = await self._session.execute(query.order_by(EvidenceItem.id).limit(limit))
+        return list(result.scalars().all())
 
 
 class AuditRepository:
