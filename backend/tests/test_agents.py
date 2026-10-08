@@ -154,6 +154,61 @@ class TestPostprocess:
         cleaned, _ = _postprocess("Раздел: текст", TEMPLATE["sections"][1])
         assert cleaned.startswith("текст")
 
+    def test_strips_markdown_headings(self) -> None:
+        """Модель оформляет раздел markdown-заголовком — в акте это лишнее."""
+        cleaned, _ = _postprocess(
+            "### Описательная часть\n\n**Суд:** Образцовый", TEMPLATE["sections"][1]
+        )
+        assert "#" not in cleaned
+        assert "**" not in cleaned
+        assert "Суд: Образцовый" in cleaned
+
+    def test_strips_horizontal_rules(self) -> None:
+        cleaned, _ = _postprocess("Текст.\n\n---\n\nЕщё текст.", TEMPLATE["sections"][1])
+        assert "---" not in cleaned
+
+    def test_drops_echoed_prompt_lines(self) -> None:
+        """Модель переписывает служебные подписи запроса — их убираем."""
+        raw = (
+            "Дело № DEMO-001. Суд: Демо. Суммы, встречающиеся в материалах: 150000.\n\n"
+            "Сведения о деле: Дело № DEMO-001.\n\n"
+            "Суд, дата и номер дела: Образцовский суд, 15 мая 2026 года."
+        )
+        cleaned, _ = _postprocess(raw, TEMPLATE["sections"][0])
+        assert "Суммы, встречающиеся" not in cleaned
+        assert "Сведения о деле" not in cleaned
+        assert "Образцовский суд" in cleaned
+
+    def test_drops_repeated_lines(self) -> None:
+        """Модель на 1.5B зацикливается — повторы убираем."""
+        line = "Ответчик не исполнил обязательство по договору поставки."
+        cleaned, _ = _postprocess(f"{line}\n{line}\n{line}", TEMPLATE["sections"][1])
+        assert cleaned.count(line) == 1
+
+    def test_drops_duplicate_heading(self) -> None:
+        """Модель печатает заголовок дважды — в проекте раздел уже назван."""
+        cleaned, _ = _postprocess(
+            "**РЕШИЛ**\n\n**РЕШИЛ**\n\nВзыскать 150000 рублей.",
+            {"name": "РЕШИЛ", "key": "operative"},
+        )
+        assert cleaned.count("РЕШИЛ") == 0
+        assert cleaned.startswith("Взыскать")
+
+    def test_detects_truncation(self) -> None:
+        """Обрыв на лимите токенов обязан быть виден специалисту."""
+        cleaned, needs = _postprocess(
+            "Стороны: Образцов Петр (", TEMPLATE["sections"][0]
+        )
+        assert needs is True
+        assert NEEDS_REVIEW in cleaned
+
+    def test_complete_text_not_flagged(self) -> None:
+        cleaned, needs = _postprocess(
+            "Суд рассмотрел гражданское дело по иску истца.", TEMPLATE["sections"][0]
+        )
+        assert needs is False
+        assert "оборван" not in cleaned
+
 
 class TestVerification:
     def test_detects_invented_amount(self) -> None:

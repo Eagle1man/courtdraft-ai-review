@@ -41,6 +41,10 @@ data/demo/generated/
 uploads/
 *.pdf
 *.docx
+
+# Служебные файлы перенаправления вывода при фоновых прогонах демо
+backend/.demo*.out
+backend/.demo*.err
 *.sqlite
 *.db
 *.db-wal

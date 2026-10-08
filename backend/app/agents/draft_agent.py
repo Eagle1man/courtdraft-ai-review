@@ -233,9 +233,119 @@ def _postprocess(text: str, section: dict[str, Any]) -> tuple[str, bool]:
         needs_review = True
         cleaned = f"Материалы дела не позволяют подготовить раздел. {NEEDS_REVIEW}"
 
+    cleaned = _strip_leading_heading(cleaned, section["name"])
+    cleaned = _drop_heading_repeats(cleaned, section["name"])
+    cleaned = _drop_echo(cleaned)
     cleaned = _drop_repeats(cleaned)
 
+    if not cleaned:
+        needs_review = True
+        cleaned = f"Материалы дела не позволяют подготовить раздел. {NEEDS_REVIEW}"
+        return cleaned, needs_review
+
+    # Обрыв на середине фразы — признак того, что модель упёрлась в лимит
+    # ответа. Такой раздел нельзя нести дальше как готовый: обрыв должен
+    # быть виден специалисту, а не выглядеть как конец мысли.
+    if cleaned.rstrip()[-1:] not in ".!?;:»)]}\"'":
+        needs_review = True
+        cleaned = (
+            cleaned.rstrip()
+            + f"\n\n[текст оборван по лимиту ответа] {NEEDS_REVIEW}"
+        )
+
     return cleaned, needs_review
+
+
+# Служебные подписи, которые модель переносит в текст решения.
+# Это не содержание проекта, а метаданные запроса.
+_ECHO_MARKERS = (
+    "суммы, встречающиеся в материалах",
+    "сведения о деле:",
+    "материалы:",
+    "материалы дела",
+    "назначение раздела:",
+    "сейчас пиши текст",
+    "если сведений не хватает",
+    "если нормы права в материале",
+)
+
+
+def _drop_echo(text: str) -> str:
+    """Убрать строки, где модель пересказывает сам запрос.
+
+    Модель на 1.5B склонна цитировать входные данные дословно. В проекте
+    судебного акта это выглядит как служебная простыня, а не как текст.
+    """
+    kept: list[str] = []
+    for raw in text.split("\n"):
+        lowered = raw.lower()
+        if any(marker in lowered for marker in _ECHO_MARKERS):
+            continue
+        kept.append(raw)
+    return "\n".join(kept).strip()
+
+
+def _strip_leading_heading(text: str, name: str) -> str:
+    """Убрать название раздела в начале текста, если модель его повторила.
+
+    Сделано ПОСЛЕ снятия markdown-разметки: «**РЕШИЛ**» превращается в
+    «РЕШИЛ» только на этом шаге, и раньше проверка не видела заголовок.
+    Удаляются подряд идущие повторы вместе с пустыми строками между ними.
+    """
+    target = re.sub(r"\W+", "", name.upper())
+    if not target:
+        return text
+
+    lines = text.split("\n")
+    index = 0
+    # Пропускаем ведущие пустые строки.
+    while index < len(lines) and not lines[index].strip():
+        index += 1
+
+    removed = 0
+    while index < len(lines):
+        key = re.sub(r"\W+", "", lines[index]).upper()
+        if key == target:
+            index += 1
+            removed += 1
+            # Поглощаем пустые строки после заголовка, но только если
+            # дальше снова идёт тот же заголовок.
+            probe = index
+            while probe < len(lines) and not lines[probe].strip():
+                probe += 1
+            if probe < len(lines) and re.sub(r"\W+", "", lines[probe]).upper() == target:
+                index = probe
+            continue
+        break
+
+    if not removed:
+        return text
+    return "\n".join(lines[index:]).strip()
+
+
+def _drop_heading_repeats(text: str, name: str) -> str:
+    """Убрать повторы названия раздела.
+
+    Модель иногда печатает заголовок дважды подряд («РЕШИЛ / РЕШИЛ»).
+    В проекте раздел уже назван заголовком выше, поэтому дубль только
+    путает структуру документа.
+    """
+    target = re.sub(r"\W+", "", name.upper())
+    if not target:
+        return text
+
+    kept: list[str] = []
+    seen_heading = False
+    for raw in text.split("\n"):
+        key = re.sub(r"[\W*#]+", "", raw).strip().upper()
+        is_heading = bool(key) and key == target
+        if is_heading and seen_heading:
+            continue
+        # Пустая строка не должна сбрасывать счётчик: модель печатает
+        # «РЕШИЛ» / пустая / «РЕШИЛ», и это всё тот же дубль.
+        seen_heading = is_heading or (not raw.strip() and seen_heading)
+        kept.append(raw)
+    return "\n".join(kept).strip()
 
 
 def _drop_repeats(text: str) -> str:
