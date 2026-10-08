@@ -7,6 +7,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from app.agents.draft_agent import (
     NEEDS_REVIEW,
     DraftResult,
@@ -337,6 +339,69 @@ class TestVerification:
         report = verify_draft(draft, pack)
         assert report.unsupported_claims == 0
         assert report.status is VerificationStatus.PASS
+
+
+class TestLawCaseForms:
+    """Падежные формы слова «статья».
+
+    Каждая непройденная форма означала ложное срабатывание уровня
+    CRITICAL: номер статьи не попадал в список ссылок на нормы, и проверка
+    чисел объявляла корректную ссылку выдуманной суммой.
+    """
+
+    @pytest.mark.parametrize(
+        "phrase",
+        [
+            "в соответствии со статьей 309 ГК РФ",
+            "в соответствии со статьёй 309 ГК РФ",
+            "согласно статьи 309 ГК РФ",
+            "согласно статье 309 ГК РФ",
+            "статью 309 ГК РФ применяется",
+            "статьями 309 ГК РФ",
+            "статьях 309 ГК РФ",
+            "руководствуясь ст. 309 ГК РФ",
+        ],
+    )
+    def test_form_recognised(self, phrase: str) -> None:
+        from app.verification.engine import _laws_in
+
+        assert ("309", "ГК") in _laws_in(phrase)
+
+    def test_list_split_by_comma_and_and(self) -> None:
+        """Перечисление статей разбирается и по запятой, и по «и»."""
+        from app.verification.engine import _laws_in
+
+        found = _laws_in("согласно статьям 309, 310 и 314 ГК РФ")
+        assert {("309", "ГК"), ("310", "ГК"), ("314", "ГК")} <= found
+
+    def test_article_number_not_flagged_as_amount(self) -> None:
+        """Ключевая проверка: номер статьи не должен попадать в числа."""
+        from app.verification.engine import verify_draft
+
+        pack = make_pack()
+        draft = DraftResult(
+            case_number="DEMO-001",
+            sections=[
+                SectionDraft(
+                    key="motivating",
+                    name="Мотивировочная часть",
+                    text=(
+                        "В соответствии со статьей 309 ГК РФ обязательства "
+                        "должны быть исполнены надлежащим образом."
+                    ),
+                    is_mock=False,
+                    citations=["01_claim.txt"],
+                )
+            ],
+        )
+        report = verify_draft(draft, pack)
+        invented = [
+            i for i in report.issues
+            if i.type is IssueType.UNSUPPORTED_CLAIM
+        ]
+        assert not any("309" in i.reason for i in invented), (
+            "номер статьи помечен как выдуманное число"
+        )
 
 
 class TestDraftText:

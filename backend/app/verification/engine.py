@@ -23,6 +23,7 @@ from enum import StrEnum
 
 from app.agents.draft_agent import NEEDS_REVIEW, DraftResult
 from app.agents.evidence_pack import EvidencePack
+from app.verification.persons import check_section
 
 
 class VerificationStatus(StrEnum):
@@ -125,8 +126,13 @@ _NUM_RE = re.compile(r"\b(\d[\d\s ]{1,12})\b")
 _LAW_RE = re.compile(
     # «ст.» и «статья N» имеют приоритет над «п. N»: иначе «п. 1 ст. 486»
     # распознаётся как «пункт 1 статьи СТ», то есть как выдуманная норма.
-    r"(?:ст\.|стать(?:я|и|ю|е|ями|ях|ам|ами)\.?)\s*"
-    r"(\d+(?:\s*,\s*\d+)*)"
+    #
+    # Падежные формы перечислены полностью, включая «статьей»: без неё
+    # ссылка не распознавалась, а её номер статьи тут же попадал в
+    # проверку чисел и помечался как выдуманная сумма — то есть
+    # корректная ссылка на норму давала ложную тревогу CRITICAL.
+    r"(?:ст\.|стат(?:ьёй|ьей|ье|ьи|ью|ьями|ьях|ьям|ьё|и)\.?)\s*"
+    r"(\d+(?:\s*(?:,|и)\s*\d+)*)"
     r"\s*(?:([А-ЯЁ][А-ЯЁ ]{0,12}?)(?:РФ|кодекс))?",
     re.IGNORECASE,
 )
@@ -166,7 +172,15 @@ def _laws_in(text: str) -> set[tuple[str, str]]:
 
     for m in _LAW_RE.finditer(text):
         # «статьями 309, 310, 314 ГК РФ» — это три ссылки, а не одна.
-        articles = [a.strip() for a in m.group(1).split(",") if a.strip()]
+        # «статьями 309, 310 и 314 ГК РФ» — это три ссылки, а не одна.
+        # Список разделяется и запятой, и союзом «и»: модель пишет и так,
+        # и так, а приведённая форма без разбора давала «310 и 314» одним
+        # номером статьи, и обе ссылки уходили в проверку чисел.
+        articles = [
+            a.strip()
+            for a in re.split(r"\s*(?:,|и)\s*", m.group(1))
+            if a.strip()
+        ]
         code = (m.group(2) or "").strip().upper()
 
         if not code:
@@ -302,6 +316,33 @@ def verify_draft(draft: DraftResult, pack: EvidencePack) -> VerificationReport:
                     text=text[:200],
                     reason=f"ошибка генерации: {section.error}",
                     section=section.name,
+                )
+            )
+
+        # ── 7. Персоны, которых нет в материалах дела ─────────────
+        persons, roles = check_section(text, section.name, pack)
+
+        for finding in persons:
+            report.unsupported_claims += 1
+            report.issues.append(
+                Issue(
+                    type=IssueType.UNSUPPORTED_CLAIM,
+                    severity=Severity.HIGH,
+                    text=text[:200],
+                    reason=finding.reason,
+                    section=finding.section,
+                )
+            )
+
+        for role_finding in roles:
+            report.unsupported_claims += 1
+            report.issues.append(
+                Issue(
+                    type=IssueType.CONTRADICTION,
+                    severity=Severity.CRITICAL,
+                    text=text[:200],
+                    reason=role_finding.detail,
+                    section=role_finding.section,
                 )
             )
 
