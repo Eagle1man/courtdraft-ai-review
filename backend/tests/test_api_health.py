@@ -14,8 +14,21 @@ from app.schemas.health import ComponentState
 
 @pytest.fixture
 async def client() -> AsyncClient:
-    """Клиент поверх ASGI-приложения, без запуска сервера."""
-    app = create_app(Settings(app_env=AppEnv.DEVELOPMENT))
+    """Клиент поверх ASGI-приложения, без запуска сервера.
+
+    Настройки заданы явно и без чтения .env: тесты не должны зависеть
+    от локальной конфигурации машины. Иначе переключение провайдера
+    в .env роняло бы тесты, к настройке которых отношения не имеют.
+    """
+    app = create_app(
+        Settings(
+            _env_file=None,
+            app_env=AppEnv.DEVELOPMENT,
+            llm_provider=LLMProviderName.MOCK,
+            embedding_provider=EmbeddingProviderName.MOCK,
+            ollama_enabled=False,
+        )
+    )
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as test_client:
         yield test_client
@@ -110,6 +123,29 @@ class TestInfo:
         assert data["llm_provider"] == "mock"
         assert data["embedding_provider"] == "mock"
         assert data["ollama_enabled"] is False
+
+    async def test_info_follows_settings(self, tmp_path: Path) -> None:
+        """/api/info показывает реальный режим, а не всегда «mock».
+
+        Проверка на изолированных настройках: переключение провайдера
+        должно отражаться в ответе без правки кода (п.61).
+        """
+        app = create_app(
+            Settings(
+                _env_file=None,
+                app_env=AppEnv.DEVELOPMENT,
+                llm_provider=LLMProviderName.OLLAMA,
+                embedding_provider=EmbeddingProviderName.LOCAL,
+                ollama_enabled=True,
+            )
+        )
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as c:
+            data = (await c.get("/api/info")).json()
+
+        assert data["llm_provider"] == "ollama"
+        assert data["embedding_provider"] == "local"
+        assert data["ollama_enabled"] is True
 
     async def test_info_contains_legal_disclaimer(self, client: AsyncClient) -> None:
         """П.70: предупреждение обязано быть в интерфейсе."""

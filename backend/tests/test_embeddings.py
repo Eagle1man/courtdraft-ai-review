@@ -139,12 +139,28 @@ class TestEmbeddingFactory:
 class TestSettings:
     """Переносимость между машинами обеспечивается только .env (п.61)."""
 
-    def test_development_defaults_are_mock(self) -> None:
-        cfg = Settings()
+    def test_code_defaults_are_mock(self) -> None:
+        """Значения по умолчанию заданы в коде, а не берутся из .env.
+
+        Проверяется именно код: Settings() без аргументов читает .env
+        рабочей машины, и тест падал бы каждый раз, когда разработчик
+        переключает провайдера на настоящую модель. Значение по
+        умолчанию меняться не должно.
+        """
+        cfg = Settings(_env_file=None)
         assert cfg.llm_provider is LLMProviderName.MOCK
         assert cfg.embedding_provider is EmbeddingProviderName.MOCK
         assert cfg.ollama_enabled is False
         assert cfg.is_real_mode is False
+
+    def test_env_switches_provider(self) -> None:
+        """Переключение провайдера возможно без правки кода (п.61)."""
+        cfg = Settings(embedding_provider=EmbeddingProviderName.LOCAL)
+        assert cfg.embedding_provider is EmbeddingProviderName.LOCAL
+        # Модель и размерность обязаны совпадать: иначе индекс
+        # создать нельзя.
+        assert cfg.embedding_dim == 1024
+        assert cfg.embedding_model == "bge-m3"
 
     def test_runtime_switch_requires_no_code_change(self) -> None:
         """Один и тот же код — два режима (п.61)."""

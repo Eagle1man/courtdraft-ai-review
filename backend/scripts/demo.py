@@ -34,7 +34,7 @@ from app.agents.evidence_pack import (  # noqa: E402
 from app.config import EmbeddingProviderName, LLMProviderName, Settings  # noqa: E402
 from app.db.repositories import AuditRepository, DocumentRepository  # noqa: E402
 from app.db.session import create_engine_and_session  # noqa: E402
-from app.embeddings.mock import MockEmbeddingProvider  # noqa: E402
+from app.embeddings import build_embedding_provider  # noqa: E402
 from app.ingestion.chunking import chunk_text  # noqa: E402
 from app.ingestion.extract import detect_mime_type, extract_text, guess_document_type  # noqa: E402
 from app.llm import build_llm_provider  # noqa: E402
@@ -92,17 +92,32 @@ def reset_output() -> None:
 
 
 def make_settings(provider: str, workdir: Path) -> Settings:
-    """Настройки прогона. БД и индекс — во временном каталоге."""
+    """Настройки прогона. БД и индекс — во временном каталоге.
+
+    Эмбеддинги берутся из настроек, а не задаются заглушкой: на прогоне
+    с настоящей моделью должен быть настоящий и поиск, иначе замеры
+    показывают поведение заглушки, а не системы.
+    """
     llm = LLMProviderName.MOCK if provider == "mock" else LLMProviderName.OLLAMA
+    # При заглушке LLM эмбеддинги тоже оставляем заглушкой: иначе
+    # прогон «мгновенный» стал бы ждать настоящую модель.
+    embeddings = (
+        EmbeddingProviderName.MOCK
+        if provider == "mock"
+        else EmbeddingProviderName.LOCAL
+    )
     return Settings(
         app_env="development",
         llm_provider=llm,
-        embedding_provider=EmbeddingProviderName.MOCK,
+        embedding_provider=embeddings,
         ollama_enabled=provider != "mock",
         ollama_model="qwen2.5:1.5b",
         ollama_base_url="http://127.0.0.1:11434",
         ollama_timeout_sec=1800,
         ollama_num_ctx=2048,
+        # Русские тексты длиннее английских в токенах: батч поменьше,
+        # иначе часть фрагментов обрезается по контексту модели.
+        embedding_batch_size=8,
         database_url=f"sqlite+aiosqlite:///{(workdir / 'demo.db').as_posix()}",
         storage_dir=workdir,
         documents_dir=workdir / "documents",
@@ -140,7 +155,15 @@ async def run_demo(
         alive = await llm.health()
         say(f"  доступна: {'да' if alive else 'НЕТ — будет запись об ошибке'}", log)
 
-    say("  Embeddings: MockEmbeddingProvider", log)
+    say(
+            "  Embeddings: "
+            + (
+                "заглушка (режим mock)"
+                if provider == "mock"
+                else f"{settings.embedding_model}, {settings.embedding_dim} измерений"
+            ),
+            log,
+        )
     say("  База:       SQLite (временная)", log)
     say("  Индекс:     встроенный Qdrant (в памяти)", log)
     say("  GPU:        не требуется", log)
@@ -213,8 +236,23 @@ async def run_demo(
         banner("3", "ЭМБЕДДИНГИ И ИНДЕКС", log)
         from qdrant_client import QdrantClient
 
-        store = VectorStore(QdrantClient(":memory:"), dimension=1024)
-        embeddings = MockEmbeddingProvider(dimension=1024)
+        store = VectorStore(
+            QdrantClient(":memory:"), dimension=settings.embedding_dim
+        )
+        # Провайдер берётся из настроек: на прогоне с настоящей моделью
+        # поиск должен быть настоящим, иначе замер бессмысленен.
+        embeddings = build_embedding_provider(settings)
+        say(
+            f"  провайдер: {embeddings.name}, размерность {embeddings.dimension}",
+            log,
+        )
+        if not await embeddings.health():
+            say(
+                "  ВНИМАНИЕ: модель эмбеддингов недоступна. "
+                "Индекс будет заполнен заглушкой — замеры покажут "
+                "поведение заглушки, а не системы.",
+                log,
+            )
         from app.embeddings.base import Embedding
 
         rows = await repo.list_for_case(case.id)
@@ -240,7 +278,11 @@ async def run_demo(
 
         stats = store.stats(CollectionName.DOCUMENTS.value)
         say(f"  фрагментов: {total_chunks}, в индексе: {stats.points}", log)
-        say(f"  коллекция: {CollectionName.DOCUMENTS.value}, размерность 1024", log)
+        say(
+            f"  коллекция: {CollectionName.DOCUMENTS.value}, "
+            f"размерность {store.dimension}",
+            log,
+        )
 
         # ── Шаг 4. Поиск по делу ───────────────────────────────────
         banner("4", "ПОИСК ПО МАТЕРИАЛАМ ДЕЛА (проверка индекса)", log)
