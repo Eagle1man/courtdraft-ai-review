@@ -178,7 +178,7 @@ class TestStructure:
 
     def test_starts_with_legal_basis(self) -> None:
         text = build_operative([full_claim()], fee_paid=5100).render()
-        assert text.startswith("Руководствуясь ст. 209, 210, 211 ГПК РФ")
+        assert text.startswith("Руководствуясь ст. 198 ГПК РФ, суд решил:")
 
     def test_items_are_numbered_from_one(self) -> None:
         text = build_operative([full_claim()], fee_paid=5100).render()

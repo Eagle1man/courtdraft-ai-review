@@ -33,6 +33,10 @@ logger = logging.getLogger(__name__)
 NEEDS_REVIEW = "ТРЕБУЕТ ПРОВЕРКИ СПЕЦИАЛИСТОМ"
 NO_LAW_FOUND = "Норма права не найдена. Требуется проверка специалистом."
 
+# Разделы, которые собираются по правилам, а не генерируются моделью.
+# Ключи совпадают с ключами шаблона data/templates/civil_judgment.json.
+RULES_BUILT_SECTIONS = frozenset({"operative"})
+
 SYSTEM_PROMPT = """Ты — помощник судьи. Пишешь ТОЛЬКО текст одного раздела решения суда.
 
 ПРАВИЛА:
@@ -329,6 +333,55 @@ def _strip_leading_heading(text: str, name: str) -> str:
     return "\n".join(lines[index:]).strip()
 
 
+def _build_operative_section(section: dict[str, Any], pack: EvidencePack) -> SectionDraft:
+    """Собрать резолютивную часть по правилам, без участия модели.
+
+    Требования извлекаются из пакета доказательств, где лежат фразы
+    из материалов дела вместе с указанием документа. Затем
+    app.drafting.operative переводит их в установленную форму.
+
+    Неразобранные требования не выбрасываются молча: они попадают в
+    раздел отдельным абзацем, чтобы судья увидел, что часть
+    требований осталась вне проекта решения.
+    """
+    from app.drafting.operative import build_operative
+    from app.drafting.requirements import (
+        extract_fee_and_costs,
+        extract_parties,
+        extract_requirements,
+    )
+
+    money, others, unrecognised = extract_requirements(pack)
+    fee, costs = extract_fee_and_costs(pack)
+    parties = extract_parties(pack)
+    result = build_operative(
+        money, others, fee_paid=fee, costs=costs, parties=parties
+    )
+
+    text = result.render()
+
+    if unrecognised:
+        listed = "; ".join(f"— {item}" for item in unrecognised)
+        text += (
+            f"\n\nТребования, которые не удалось отнести к установленным "
+            f"основаниям, требуют проверки специалистом:\n{listed}."
+        )
+
+    citations: list[str] = [claim.source for claim in money if claim.source]
+    citations.extend(claim.source for claim in others if claim.source)
+
+    return SectionDraft(
+        key=section["key"],
+        name=section["name"],
+        text=text,
+        # Раздел собран правилами, а не получен от заглушки модели.
+        # Флаг «получено от настоящей модели» здесь был бы неверным.
+        is_mock=False,
+        citations=citations,
+        needs_review=bool(result.gaps) or bool(unrecognised),
+    )
+
+
 def _drop_heading_repeats(text: str, name: str) -> str:
     """Убрать повторы названия раздела.
 
@@ -384,7 +437,14 @@ async def generate_draft(
     settings: Settings | None = None,
     only_sections: list[str] | None = None,
 ) -> DraftResult:
-    """Сгенерировать проект судебного акта по разделам."""
+    """Сгенерировать проект судебного акта по разделам.
+
+    Раздел резолютивной части собирается по правилам и модели не
+    передаётся. Причина: это единственная часть решения, где ошибка
+    непоправима — в ней суд постановляет, кому и сколько платить.
+    Модель на 1,5B путает стороны именно тут, и лечится это не длиной
+    промпта, а жёсткой грамматикой (см. app.drafting.operative).
+    """
     cfg = settings or get_settings()
     llm = provider or build_llm_provider(cfg)
 
@@ -401,6 +461,11 @@ async def generate_draft(
     started = time.perf_counter()
 
     for section in sections_to_do:
+        # Резолютивная часть — правилами, не моделью.
+        if section["key"] in RULES_BUILT_SECTIONS:
+            result.sections.append(_build_operative_section(section, pack))
+            continue
+
         request_text, citations = build_section_prompt(section, pack)
 
         request = LLMRequest(

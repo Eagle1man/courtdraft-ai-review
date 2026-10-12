@@ -16,6 +16,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Any
 
+from app.agents.claim_phrases import looks_like_claim
 from app.config import Settings, get_settings
 from app.models.entities import CaseDocument
 
@@ -63,6 +64,15 @@ class EvidenceItem:
     chunk_anchor: str = ""
     # Числа, извлечённые из источника: модель не должна их придумывать.
     amounts: list[str] = field(default_factory=list)
+    #: Порядок предложения внутри документа.
+    #:
+    #: Пакет группируется по категориям, поэтому по индексу в списке
+    #: порядок восстановить нельзя: фраза из середины требования
+    #: оказывалась рядом с чужой. Без этого номера склейка требования
+    #: собирала «взыскать с ответчика расходы по госпошлине» в один
+    #: пункт с задолженностью, и сумма терялась. Ноль означает
+    #: «порядок неизвестен» — для фактов, созданных вне пакета.
+    order: int = 0
 
     @property
     def citation(self) -> str:
@@ -151,9 +161,47 @@ def load_template(settings: Settings | None = None) -> dict[str, Any]:
 
 
 def _sentences(text: str) -> list[str]:
-    """Разбить на осмысленные фразы — они и станут фактами."""
+    """Разбить на осмысленные фразы — они и станут фактами.
+
+    Короткие фразы отбрасываются, но не все: в исковом заявлении
+    требование разбито на строки, и строка с суммой бывает очень
+    короткой:
+
+        Взыскать с Фирма «...» в пользу Образцов Пётр Петрович
+        задолженность по договору поставки № Д-2026/001
+        в размере 150000 руб.
+
+    «в размере 150000 руб.» — 22 символа, и при пороге 25 эта строка
+    молча выпадала из пакета вместе с суммой. Резолютивная часть
+    оказывалась без суммы при полном пакете доказательств.
+    """
     parts = re.split(r"(?<=[.;])\s+|\n+", text)
-    return [p.strip() for p in parts if len(p.strip()) > 25]
+    kept: list[str] = []
+    for part in parts:
+        candidate = part.strip()
+        if not candidate:
+            continue
+        if len(candidate) > 25:
+            kept.append(candidate)
+        elif _carries_critical_data(candidate):
+            # Короткая, но несёт сумму, дату или требование — её
+            # нельзя терять.
+            kept.append(candidate)
+    return kept
+
+
+# Признаки того, что короткая фраза не может быть отброшена.
+_CRITICAL = re.compile(
+    r"\d[\d\s\u00a0]*\s*(?:руб|коп|₽)"  # сумма
+    r"|\d{1,2}\s+(?:январ|феврал|март|апрел|ма|июн|июл|август|сентябр|октяб|нояб|декаб)"
+    r"|\bвзыск\w+|\bудовлетвори\w+|\bтреб\w+|\bобяза\w+",
+    re.I,
+)
+
+
+def _carries_critical_data(text: str) -> bool:
+    """Несёт ли короткая фраза сумму, дату или само требование."""
+    return bool(_CRITICAL.search(text))
 
 
 def extract_money(text: str) -> list[str]:
@@ -194,7 +242,14 @@ def _classify(sentence: str, doc_type: str) -> str:
     """Определить категорию факта по содержанию и типу документа."""
     s = sentence.lower()
 
-    if "истец просит" in s or "прошу" in s or "требования" in s:
+    # Требования истца распознаются раньше всех остальных правил.
+    # Раньше здесь стояли три точные формулировки («истец просит»,
+    # «прошу», «требования»), и этого было мало: на живом деле из
+    # 46 фактов в категорию «claims» попадал один, причём не
+    # требование, а фраза представителя. Резолютивная часть
+    # собирается именно из этой категории, и пустая категория означала
+    # пустую резолюцию при полном пакете доказательств.
+    if looks_like_claim(sentence):
         return "claims"
     if "возражен" in s or "просит отказать" in s:
         return "objections"
@@ -232,6 +287,12 @@ def build_evidence_pack(
     grouped: dict[str, list[tuple[CaseDocument, str]]] = defaultdict(list)
     all_amounts: list[str] = []
     all_dates: list[str] = []
+    # Номер предложения в документе — по id(), потому что одинаковых
+    # строк в документе может быть несколько. Нумерация с единицы:
+    # ноль означает «порядок неизвестен» для фактов, созданных вне
+    # пакета, и не должен совпадать с номером первого предложения.
+    sentence_order: dict[int, int] = {}
+    sentence_counter = [1]
 
     for document in documents:
         text = document.text or ""
@@ -267,6 +328,12 @@ def build_evidence_pack(
                 pack.participants.append(f"{clean} ({role})")
 
         for sentence in _sentences(text):
+            # Порядок предложения в документе. Пакет потом группируется
+            # по категориям, и без этой метки восстановить порядок
+            # невозможно — а он нужен, чтобы склеить требование из
+            # нескольких строк.
+            sentence_order[id(sentence)] = sentence_counter[0]
+            sentence_counter[0] += 1
             category_name = _classify(sentence, document.document_type)
             grouped[category_name].append((document, sentence))
 
@@ -287,6 +354,7 @@ def build_evidence_pack(
                     page=document.page_count if document.page_count > 0 else None,
                     chunk_anchor=f"{document.id}",
                     amounts=extract_money(sentence),
+                    order=sentence_order[id(sentence)],
                 )
             )
 
