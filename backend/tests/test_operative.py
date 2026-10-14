@@ -168,7 +168,7 @@ class TestNoFabrication:
         """Ноль — это значение. Не путать с «не установлено»."""
         claim = MoneyClaim(amount=0, basis="проценты за просрочку",
                           source="расчёт истца")
-        result = build_operative([claim], fee_paid=5100)
+        result = build_operative([claim], fee_paid=5100, budget="области")
         assert result.is_complete
         assert "0 руб." in result.render()
 

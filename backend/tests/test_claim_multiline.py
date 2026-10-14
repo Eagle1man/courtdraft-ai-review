@@ -85,7 +85,7 @@ class TestClaimSpansMultipleLines:
     def test_operative_section_gets_real_amount(self) -> None:
         """Сквозная проверка: в проекте решения стоит настоящая сумма."""
         money, _, _ = extract_requirements(claim_pack(CLAIM_LINES))
-        result = build_operative(money, fee_paid=5100)
+        result = build_operative(money, fee_paid=5100, budget="области")
         text = result.render()
 
         assert "150 000" in text
