@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import shutil
 import sys
 import time
 from pathlib import Path
@@ -77,17 +78,35 @@ def reset_output() -> None:
 
     Журнал прогона лежит рядом с каталогом вывода и не удаляется: иначе
     демо стёрло бы файл, в который само пишет.
+
+    ОСТОРОЖНО, ЗАЧЕМ НУЖЕН БРЭКФИСТ. Прежние результаты сначала
+    переносились в подкаталог previous/. Без этого сбой на любом
+    шаге (например, недоступная модель эмбеддингов) оставлял каталог
+    пустым: предыдущий прогон стирался, новый не завершался, и
+    сравнивать было нечего. Демонстрация теряла ровно тот материал,
+    ради которого запускалась.
+
+    Старые файлы удаляются только из .previous — их накопление
+    ограничено одним поколением, иначе каталог рос бы без нужды.
     """
     if OUTPUT_DIR.exists():
+        previous = OUTPUT_DIR / ".previous"
+        if previous.exists():
+            shutil.rmtree(previous, ignore_errors=True)
+        # Каталог создаётся ДО перемещения, иначе move падает на
+        # несуществующем пути и результат остаётся только в выводе.
+        previous.mkdir(parents=True, exist_ok=True)
+        # Переносим, а не удаляем: до завершения нового прогона
+        # предыдущий результат остаётся доступен.
         for item in OUTPUT_DIR.iterdir():
             if not item.is_file():
                 continue
             try:
-                item.unlink(missing_ok=True)
-            except PermissionError:
+                shutil.move(str(item), str(previous / item.name))
+            except (PermissionError, OSError):
                 # Занятый файл (журнал, открытый просмотрщиком) не должен
                 # ронять демо из-за уборки.
-                say(f"  (не удалось удалить {item.name}: файл занят)")
+                say(f"  (не удалось убрать {item.name}: файл занят)")
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 
