@@ -37,7 +37,13 @@ from app.agents.claim_phrases import (
     payer_is_plaintiff,
 )
 from app.agents.evidence_pack import EvidenceItem, EvidencePack
-from app.drafting.operative import Claimant, MoneyClaim, Outcome, Parties
+from app.drafting.operative import (
+    Claimant,
+    MoneyClaim,
+    Outcome,
+    Parties,
+    Procedure,
+)
 
 # Формулировки требований и их основания описаны в app.agents.claim_phrases
 # и НЕ дублируются здесь: категория «claims» в пакете и извлечение
@@ -398,6 +404,31 @@ def extract_requirements(
     unrecognised.extend(_shorten(gap) for gap in pack.gaps[:5])
 
     return list(money.values()), list(others.values()), unrecognised
+
+
+def extract_procedure(pack: EvidencePack) -> Procedure:
+    """Порядок рассмотрения дела по материалам.
+
+    Заочное производство — 49 % гражданских дел по разбору 1 425
+    решений, поэтому определение порядка существенно: без него
+    резолютивная часть получается неполной.
+
+    Порядок устанавливается по материалам дела, а не по умолчанию:
+    наличие формулировки «в порядке заочного производства» в протоколе
+    или заявлении означает, что судья уже решил вопрос. Если таких
+    формулировок нет, но есть свидетельство неявки ответчика, порядок
+    остаётся обычным, а в пропуски попадает вопрос к судье — система
+    не решает за него, в каком порядке рассматривать дело.
+    """
+    text = " ".join(item.text for item in pack.items).lower()
+
+    if re.search(r"в\s+порядке\s+заочного\s+производства", text):
+        return Procedure.DEFAULT
+    # «В отсутствие истца» — иное основание (ст. 167 ГПК РФ), это
+    # не заочное производство и путать их нельзя.
+    if re.search(r"рассмотреть\s+дело\s+в\s+отсутствие\s+истца", text):
+        return Procedure.ABSENT_PLAINTIFF
+    return Procedure.ORDINARY
 
 
 def _is_fee_requirement(text: str) -> bool:

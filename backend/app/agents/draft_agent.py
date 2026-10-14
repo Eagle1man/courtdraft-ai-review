@@ -348,14 +348,17 @@ def _build_operative_section(section: dict[str, Any], pack: EvidencePack) -> Sec
     from app.drafting.requirements import (
         extract_fee_and_costs,
         extract_parties,
+        extract_procedure,
         extract_requirements,
     )
 
     money, others, unrecognised = extract_requirements(pack)
     fee, costs = extract_fee_and_costs(pack)
     parties = extract_parties(pack)
+    procedure = extract_procedure(pack)
     result = build_operative(
-        money, others, fee_paid=fee, costs=costs, parties=parties
+        money, others, fee_paid=fee, costs=costs, parties=parties,
+        procedure=procedure,
     )
 
     text = result.render()

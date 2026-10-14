@@ -7,6 +7,7 @@ from app.drafting.operative import (
     OperativePart,
     Outcome,
     Parties,
+    Procedure,
     build_operative,
     rubles_to_words,
 )
@@ -18,6 +19,7 @@ __all__ = [
     "OperativePart",
     "Outcome",
     "Parties",
+    "Procedure",
     "build_operative",
     "rubles_to_words",
 ]
