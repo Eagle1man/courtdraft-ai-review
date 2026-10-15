@@ -347,6 +347,7 @@ def _build_operative_section(section: dict[str, Any], pack: EvidencePack) -> Sec
     from app.drafting.operative import build_operative
     from app.drafting.requirements import (
         extract_budget,
+        extract_counter_claims,
         extract_fee_and_costs,
         extract_parties,
         extract_procedure,
@@ -354,13 +355,14 @@ def _build_operative_section(section: dict[str, Any], pack: EvidencePack) -> Sec
     )
 
     money, others, unrecognised = extract_requirements(pack)
+    counters = extract_counter_claims(pack)
     fee, costs = extract_fee_and_costs(pack)
     parties = extract_parties(pack)
     procedure = extract_procedure(pack)
     budget = extract_budget(pack)
     result = build_operative(
-        money, others, fee_paid=fee, costs=costs, parties=parties,
-        procedure=procedure, budget=budget,
+        money, others, counter_claims=counters, fee_paid=fee,
+        costs=costs, parties=parties, procedure=procedure, budget=budget,
     )
 
     text = result.render()
@@ -374,6 +376,7 @@ def _build_operative_section(section: dict[str, Any], pack: EvidencePack) -> Sec
 
     citations: list[str] = [claim.source for claim in money if claim.source]
     citations.extend(claim.source for claim in others if claim.source)
+    citations.extend(claim.source for claim in counters if claim.source)
 
     return SectionDraft(
         key=section["key"],

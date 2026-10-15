@@ -39,6 +39,7 @@ from app.agents.claim_phrases import (
 from app.agents.evidence_pack import EvidenceItem, EvidencePack
 from app.drafting.operative import (
     Claimant,
+    CounterClaim,
     MoneyClaim,
     Outcome,
     Parties,
@@ -196,6 +197,11 @@ CLAIM_START = re.compile(
 # задолженности … в размере 150000 руб.», но не захватывает
 # следующее требование, если оно начинается раньше.
 CLAIM_WINDOW = 700
+
+# Признак встречного требования. Слово «встречн» покрывает все три
+# реальные формы, найденные в резолюциях: «встречный иск»,
+# «встречное исковое заявление», «встречные исковые требования».
+COUNTER_MARKER = re.compile(r"встречн\w*", re.I)
 
 
 def _claim_windows(streams: list[tuple[str, str]]) -> list[tuple[str, str]]:
@@ -404,6 +410,58 @@ def extract_requirements(
     unrecognised.extend(_shorten(gap) for gap in pack.gaps[:5])
 
     return list(money.values()), list(others.values()), unrecognised
+
+
+def extract_counter_claims(pack: EvidencePack) -> list[CounterClaim]:
+    """Встречные требования ответчика из материалов дела.
+
+    Встречный иск меняет направление платежа: ответчик становится
+    истцом. В решениях он формулируется как «В удовлетворении встречных
+    исковых требований … отказать» или «Взыскать с истца в пользу
+    ответчика …».
+
+    ПОЧЕМУ ИЩЕМ НЕ ПО ОКНАМ ТРЕБОВАНИЙ. Первая версия брала
+    текст требования из _claim_windows, и на живом тексте не срабатывала
+    ни разу. Окно начинается с глагола «взыскать», а признак стоит
+    перед ним: «Ответчик заявил встречный иск: взыскать с истца …».
+    Признак отсекался, и резолюция выходила без пункта — как будто
+    ответчик ничего не заявлял. Поэтому окно строится от самого слова
+    «встречн», а не от глагола.
+
+    Направление платежа определяется по плательщику: если в тексте «с
+    истца», требование предъявлено ответчиком. Если плательщик не
+    определён, а требование отказано, направление не нужно — суд
+    отказал, и перечислять стороны незачем.
+    """
+    counter: list[CounterClaim] = []
+    seen: set[tuple[str, int]] = set()
+    for source, stream in _document_streams(pack):
+        for match in COUNTER_MARKER.finditer(stream):
+            window = stream[match.start() : match.start() + CLAIM_WINDOW]
+            low = window.lower()
+            # Отказ судьи в принятии заявления — это не требование,
+            # а процессуальное действие. В резолюции ему не место.
+            if "принять встречн" in low and "требован" not in low:
+                continue
+            denied = "отказать" in low
+            if not denied and not payer_is_plaintiff(window):
+                continue
+            key = (source, match.start())
+            if key in seen:
+                continue
+            seen.add(key)
+            found = _find_amount_with_kopecks(window)
+            whole, kopecks = found if found else (None, 0)
+            counter.append(
+                CounterClaim(
+                    amount=whole,
+                    basis=claim_basis(window) or "встречное требование",
+                    source=source,
+                    kopecks=kopecks,
+                    outcome=Outcome.DENIED if denied else Outcome.SATISFIED,
+                )
+            )
+    return counter
 
 
 def extract_procedure(pack: EvidencePack) -> Procedure:

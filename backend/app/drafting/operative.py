@@ -245,6 +245,22 @@ class Parties:
 
 
 @dataclass(frozen=True)
+class CounterClaim:
+    """Встречное требование ответчика.
+
+    Отдельный тип, потому что направление платежа обратное: ответчик
+    становится истцом. Собирается тем же способом, что и обычное
+    требование, но с перевёрнутыми сторонами.
+    """
+
+    amount: float | None
+    basis: str
+    source: str
+    kopecks: int = 0
+    outcome: Outcome = Outcome.SATISFIED
+
+
+@dataclass(frozen=True)
 class MoneyClaim:
     """Денежное требование, извлечённое из материалов дела.
 
@@ -471,10 +487,49 @@ def _satisfy(
     )
 
 
+def _render_counter_claim(
+    counter: CounterClaim, named: Parties
+) -> str:
+    """Собрать пункт по встречному требованию ответчика.
+
+    Направление платежа обратное: отвечает истец, в пользу ответчика.
+    Ошибка здесь не косметическая — «взыскать с ответчика» вместо «с
+    истца» предписывает платёж не тому, и такой проект решения влечёт
+    реальные убытки стороне.
+
+    Формулировки взяты из решений: «В удовлетворении встречных
+    исковых требований … отказать» и «Принять встречное исковое
+    заявление …».
+
+    Если сумма не установлена, подставляется не ноль, а видимая
+    пометка: судья должен увидеть, что цифры нет, а не получить
+    предписание взыскать ноль.
+    """
+    subject = "встречных исковых требований ответчика"
+    if counter.outcome is Outcome.DENIED:
+        return (
+            f"В удовлетворении {subject} ({counter.basis}, "
+            f"{counter.source}) отказать."
+        )
+    if counter.amount is None:
+        return (
+            f"Удовлетворить {subject} ({counter.basis}, "
+            f"{counter.source}): взыскать с {named.plaintiff_genitive} в "
+            f"пользу {named.defendant_genitive} {REVIEW} (сумма не "
+            f"установлена)."
+        )
+    return (
+        f"Удовлетворить {subject} ({counter.basis}, {counter.source}): "
+        f"взыскать с {named.plaintiff_genitive} в пользу "
+        f"{named.defendant_genitive} {_amount(counter.amount, counter.kopecks)}."
+    )
+
+
 def build_operative(
     money_claims: list[MoneyClaim],
     other_claims: list[Claimant] | None = None,
     *,
+    counter_claims: list[CounterClaim] | None = None,
     fee_paid: float | None = None,
     costs: float | None = None,
     fee_stakes: bool = True,
@@ -494,6 +549,9 @@ def build_operative(
     Аргументы:
         money_claims: денежные требования, извлечённые из материалов.
         other_claims: требования без денежной суммы.
+        counter_claims: встречные требования ответчика. Направление
+            платежа у них обратное, поэтому они разрешаются отдельно
+            и не смешиваются с требованиями истца.
         fee_paid: размер госпошлины, уплаченной истцом. None означает,
             что сумма не установлена, — тогда пункт не выносится, а
             в пропуски попадает требование проверить.
@@ -535,7 +593,11 @@ def build_operative(
     if procedure in _PROCEDURE_ITEMS:
         result.items.append(_PROCEDURE_ITEMS[procedure])
 
-    if not money_claims and not other_claims:
+    # Пропуск об отсутствии требований ставится только если нечего
+    # разрешать вовсе. Встречное требование ответчика тоже предмет
+    # разрешения: если по иску не нашлось ничего, а ответчик заявил
+    # встречный иск, решение всё равно не пустое.
+    if not money_claims and not other_claims and not counter_claims:
         result.gaps.append("в материалах дела не найдено ни одного требования")
         return result
 
@@ -578,7 +640,18 @@ def build_operative(
                 f"({other.source})."
             )
 
-    # 3. Распределение расходов. Пункт обязателен по ст. 98 ГПК РФ,
+    # 3. Встречные требования ответчика. Идут после основных, потому
+    #    что в решениях их разрешают после разрешения иска: ответчик
+    #    заявил требование в ходе рассмотрения. Направление платежа
+    #    обратное — платит истец в пользу ответчика.
+    for counter in counter_claims or ():
+        result.items.append(_render_counter_claim(counter, named))
+        # В итог входит только реально взыскиваемое по встречному
+        # требованию: отказ в нём ничего не добавляет.
+        if counter.outcome is Outcome.SATISFIED and counter.amount is not None:
+            granted.append((counter.amount, counter.kopecks))
+
+    # 4. Распределение расходов. Пункт обязателен по ст. 98 ГПК РФ,
     #    поэтому отсутствие суммы не повод пропустить его целиком —
     #    повод оставить незаполненным и сказать об этом.
     if fee_stakes:
@@ -631,7 +704,7 @@ def build_operative(
             if costs is not None:
                 granted.append((costs, 0))
 
-    # 4. Итог «а всего». Так пишут в резолюции: одна цифра, из которой
+    # 5. Итог «а всего». Так пишут в резолюции: одна цифра, из которой
     #    видно общий размер взыскания.
     if total_line and granted:
         total_rubles = sum(value for value, _ in granted)
@@ -640,7 +713,7 @@ def build_operative(
             f"{_amount_with_words(total_rubles, _sum_kopecks(granted))}"
         )
 
-    # 5. Последствия заочного решения идут ДО права на обжалование.
+    # 6. Последствия заочного решения идут ДО права на обжалование.
     #    Заочное решение можно отменить заявлением ответчика, и без
     #    этого пункта он лишён права: в разборе 1 425 резолюций об
     #    отмене пишут 640 решений, о семидневном сроке — 378.

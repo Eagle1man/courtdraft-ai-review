@@ -81,3 +81,6 @@ desktop.ini
 *.bak
 .qmd/
 .claude/settings.local.json
+
+# Результат прошлого прогона демо: бэкап, который не нужен в репозитории
+data/demo/output/.previous/
