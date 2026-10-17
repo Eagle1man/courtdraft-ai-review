@@ -164,6 +164,79 @@ def make_settings(provider: str, workdir: Path) -> Settings:
     )
 
 
+def collect_rules(pack: EvidencePack) -> dict:
+    """Что именно извлекли правила из материалов дела.
+
+    Результат уходит в result.json и дальше в демо для сайта: окно
+    диалога отвечает вопросы о суммах и требованиях этими же данными.
+
+    Функция ничего не придумывает: это тот же код, что строит
+    резолютивную часть, вызванный второй раз. Расхождение возможно
+    только если правила поменяли между шагами, и тогда результат
+    покажет расхождение, а не спрячет его.
+    """
+    from app.drafting.requirements import (
+        extract_budget,
+        extract_counter_claims,
+        extract_fee_and_costs,
+        extract_parties,
+        extract_procedure,
+        extract_requirements,
+    )
+
+    money, others, unrecognised = extract_requirements(pack)
+    counters = extract_counter_claims(pack)
+    fee, costs = extract_fee_and_costs(pack)
+    parties = extract_parties(pack)
+    procedure = extract_procedure(pack)
+
+    return {
+        "claims": [
+            {
+                "amount": float(claim.amount or 0),
+                "kopecks": int(claim.kopecks),
+                "basis": claim.basis,
+                "source": claim.source,
+            }
+            for claim in money
+        ],
+        "other_claims": [
+            {"description": item.description, "basis": item.basis, "source": item.source}
+            for item in others
+        ],
+        "counter_claims": [
+            {
+                "amount": float(counter.amount or 0),
+                "has_amount": counter.amount is not None,
+                "basis": counter.basis,
+                "source": counter.source,
+                "outcome": str(counter.outcome.value),
+            }
+            for counter in counters
+        ],
+        "unrecognised": [str(line) for line in unrecognised],
+        "fee_paid": fee,
+        "costs": costs,
+        "budget": extract_budget(pack),
+        "procedure": str(procedure.value),
+        "parties": {
+            "plaintiff": parties.plaintiff,
+            "defendant": parties.defendant,
+        },
+        "total": sum(
+            float(claim.amount or 0) for claim in money if claim.amount is not None
+        ),
+        # Итог резолютивной части. Отдельно от total, потому что в
+        # строке «а всего» участвует и госпошлина: 150 000 + 5 100 =
+        # 155 100. На вопрос «откуда эта сумма» нужен именно этот итог,
+        # иначе диалог отвечает не на тот вопрос.
+        "total_with_fee": sum(
+            float(claim.amount or 0) for claim in money if claim.amount is not None
+        )
+        + float(fee or 0),
+    }
+
+
 async def run_demo(
     provider: str,
     only_sections: list[str] | None,
@@ -405,6 +478,29 @@ async def run_demo(
     say(f"  утверждений без источника: {report.unsupported_claims}", log)
     say(f"  время генерации: {draft.total_latency_ms/1000:.1f} с", log)
 
+    # ── Шаг 7.1. Что именно нашла система ────────────────────────────
+    #
+    # Демонстрация в диалоге обязана отвечать числами, а не текстом.
+    # Поэтому в результат кладётся не только готовый проект, но и то,
+    # что из него извлечено правилами: требования с суммами и
+    # источниками, стороны, процедура.
+    #
+    # Иначе ответы в окне пришлось бы писать руками, и они разошлись
+    # бы с проектом: на вопрос «откуда 155 100» диалог отвечал бы
+    # красиво и неверно.
+    banner("7.1", "ЧТО ИЗВЛЕЧЕНО ПРАВИЛАМИ", log)
+    rules = collect_rules(pack)
+    say(f"  требований с суммой    {len(rules['claims'])}", log)
+    say(f"  иных требований        {len(rules['other_claims'])}", log)
+    say(f"  встречных требований   {len(rules['counter_claims'])}", log)
+    say(f"  непознанных фраз       {len(rules['unrecognised'])}", log)
+    for claim in rules["claims"]:
+        amount_text = f"{claim['amount']:,.0f}".replace(",", " ")
+        say(
+            f"    {amount_text:>12} руб.  {claim['basis']}  ({claim['source']})",
+            log,
+        )
+
     # ── Шаг 8. Сохранение ──────────────────────────────────────────
     banner("8", "СОХРАНЕНИЕ РЕЗУЛЬТАТА", log)
 
@@ -444,6 +540,7 @@ async def run_demo(
                     "sources": draft.sources(),
                 },
                 "verification": report.to_dict(),
+                "rules": rules,
             },
             ensure_ascii=False,
             indent=2,

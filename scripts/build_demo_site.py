@@ -154,6 +154,10 @@ def build(
         "defendant": str(manifest.get("defendant", "")),
         "participants": [str(p) for p in pack.get("participants", [])],
         "documents": build_documents(pack.get("items", []), manifest),
+        # Что извлекли правила. Отвечает окно диалога на сайте.
+        # Отсутствие этих данных не должно молча превращать диалог в
+        # пересказ текста: тогда он отвечал бы красиво и не по делу.
+        "rules": payload.get("rules", {}),
         "sections": sections,
         "sources": [str(s) for s in draft.get("sources", [])],
         "verification": {

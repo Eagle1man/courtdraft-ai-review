@@ -57,6 +57,31 @@
       "facts": "0"
     }
   ],
+  "rules": {
+    "claims": [
+      {
+        "amount": 150000.0,
+        "kopecks": 0,
+        "basis": "задолженность по договору",
+        "source": "01_claim.txt"
+      }
+    ],
+    "other_claims": [],
+    "counter_claims": [],
+    "unrecognised": [
+      "нет данных: установленные обстоятельства"
+    ],
+    "fee_paid": 5100,
+    "costs": null,
+    "budget": "",
+    "procedure": "ordinary",
+    "parties": {
+      "plaintiff": "Образцов Пётр Петрович",
+      "defendant": "Фирма «Вымышленная Строй»"
+    },
+    "total": 150000.0,
+    "total_with_fee": 155100.0
+  },
   "sections": [
     {
       "key": "introductory",
