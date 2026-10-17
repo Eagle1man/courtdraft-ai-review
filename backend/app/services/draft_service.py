@@ -26,6 +26,7 @@ from app.db.repositories import (
     DraftRepository,
     EvidenceRepository,
 )
+from app.drafting.sections import resplit_sections
 from app.llm.base import LLMProvider
 from app.models.entities import (
     Draft,
@@ -245,6 +246,14 @@ class DraftService:
 
         Правка сохраняется целиком, а не как разметка изменений: юридический
         акт нужно уметь показать в том виде, в каком он был принят.
+
+        Разбивка на разделы и ссылки на источники переносятся на новый
+        текст. Раньше они просто терялись: правка сохранялась с пустым
+        списком разделов, и интерфейс показывал «разделов 0 ·
+        источников 0» — то есть все ссылки на материалы дела исчезали
+        именно тогда, когда судья брал проект в работу. Перенесённые
+        разделы помечаются как требующие проверки, если их текст
+        изменился: правка человека не проверялась автоматически.
         """
         if author not in {"secretary", "judge"}:
             raise ValueError(
@@ -252,12 +261,17 @@ class DraftService:
                 "Допустимы secretary и judge."
             )
 
+        if citations is None:
+            versions = await self.drafts.list_versions(draft_id)
+            previous = versions[-1].citations if versions else None
+            citations = resplit_sections(text, previous)
+
         version = await self.drafts.add_version(
             draft_id,
             text=text,
             author=author,
             comment=comment,
-            citations=citations or [],
+            citations=citations,
         )
         await self.audit.log(
             "draft.edited",

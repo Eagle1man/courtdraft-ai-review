@@ -314,6 +314,48 @@ class TestDraftGeneration:
         assert versions[1].text == "ПОЛНЫЙ ТЕКСТ ПРАВКИ СУДЬИ"
         assert versions[1].author == "judge"
 
+    async def test_manual_edit_keeps_sections_and_sources(  # noqa: ANN001
+        self, session: AsyncSession, prepared_case: uuid.UUID, monkeypatch
+    ) -> None:
+        """Правка судьи не стирает разделы и ссылки на источники.
+
+        Дефект найден на рабочей базе при подготовке демонстрации:
+        во всех проектах, где судья правил текст, последняя версия
+        хранилась с пустым списком разделов. Интерфейс показывал
+        «разделов 0 · источников 0» — ссылки на материалы дела
+        исчезали именно тогда, когда проект брали в работу.
+        """
+        from app.services import draft_service as module
+
+        monkeypatch.setattr(
+            module, "generate_draft", _fake_generate(prepared_case)
+        )
+
+        service = DraftService(session)
+        draft, v1, _, _ = await service.generate(prepared_case)
+        assert v1.citations, "у сформированного проекта должны быть разделы"
+
+        edited = v1.text  # судья правит формулировку, не переписывая акт
+        await service.add_manual_version(
+            draft.id,
+            text=edited,
+            author="judge",
+            comment="исправлена сумма",
+        )
+
+        versions = await service.list_versions(draft.id)
+        citations = versions[-1].citations
+        assert isinstance(citations, list) and citations, (
+            "правка судьи сохранила проект без разделов — "
+            "интерфейс покажет «разделов 0»"
+        )
+        keys = [section["key"] for section in citations]
+        assert keys == ["introductory", "operative"]
+        sources = {
+            str(c) for section in citations for c in section["citations"]
+        }
+        assert sources == {"01_claim.txt"}, "источники потеряны"
+
     async def test_author_must_be_human(self, session: AsyncSession, prepared_case: uuid.UUID, monkeypatch) -> None:  # noqa: ANN001
         """Правку может внести только человек, не машина.
 
