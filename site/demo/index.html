@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Демонстрация — CourtDraft AI</title>
+<meta name="description" content="Демонстрация интерфейса CourtDraft AI: проект судебного решения по синтетическим материалам дела, с проверкой и ссылками на источники.">
+<link rel="stylesheet" href="app.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#9878;</text></svg>">
+</head>
+<body>
+
+<!--
+  Статическое демо для сайта.
+
+  Страница показывает РЕАЛЬНЫЙ выход системы на синтетическом деле, а не
+  макет: данные берутся из demo-data.json, который собирается скриптом
+  scripts/build_demo_site.py прямо из прогона демо-стенда.
+
+  Чего страница не умеет и говорит об этом прямо: запускать новую
+  генерацию. Модель работает на машине разработчика, на сайте её нет, а
+  притворяться, что кнопка «Сформировать проект» что-то делает, —
+  значит показать заказчику неработающую кнопку.
+
+  Правило о данных: в сайт попадают только синтетические материалы.
+  Скрипт-сборщик проверяет маркер синтетичности и отказывается
+  собирать страницу без него.
+-->
+
+<header class="top">
+  <div class="wrap">
+    <div class="brand">
+      <span class="mark">⚖</span>
+      <div>
+        <h1>CourtDraft</h1>
+        <p class="sub">Демонстрация: проект судебного решения по материалам дела</p>
+      </div>
+    </div>
+    <div class="status">
+      <a href="../index.html">← на главную</a><br>
+      <span id="mode">загрузка…</span>
+    </div>
+  </div>
+</header>
+
+<div class="notice demo-banner" id="demo-note">
+  <strong>Это запись демонстрационного прогона, а не работающая система.</strong>
+  Материалы дела синтетические, реального судебного дела за ними нет.
+  Текст показан ровно тот, который выдала система. Новый проект здесь
+  сформировать нельзя: модель работает локально на машине, материалы
+  дела не выходят с неё — в этом и состоит требование к продукту.
+</div>
+
+<div class="notice" id="disclaimer">
+  <strong>Это проект, а не решение суда.</strong>
+  Проверка и принятие решения — за судьёй. Любое утверждение без ссылки
+  на материалы дела помечено как требующее проверки.
+</div>
+
+<main class="wrap layout">
+
+  <!-- ── Дело и материалы ──────────────────────────────────── -->
+  <aside class="panel">
+    <h2>Дело</h2>
+    <ul class="case-list">
+      <li class="active" id="case-item">
+        <span id="case-number">—</span>
+        <span class="doc-type" id="case-court">—</span>
+      </li>
+    </ul>
+
+    <h2 class="mt">Стороны</h2>
+    <ul class="doc-list" id="party-list">
+      <li class="muted">—</li>
+    </ul>
+
+    <h2 class="mt">Материалы дела</h2>
+    <ul class="doc-list" id="doc-list">
+      <li class="muted">Загрузка…</li>
+    </ul>
+  </aside>
+
+  <!-- ── Проект ────────────────────────────────────────────── -->
+  <section class="panel main">
+
+    <div class="head-row">
+      <div>
+        <h2 id="draft-title">Проект решения</h2>
+        <p class="muted" id="draft-meta">—</p>
+      </div>
+    </div>
+
+    <div class="verification" id="verification" hidden>
+      <h3>Проверка проекта</h3>
+      <div class="verdict" id="verdict"></div>
+      <ul class="issues" id="issues"></ul>
+    </div>
+
+    <div class="sections" id="sections">
+      <p class="muted">Разделы проекта загружаются…</p>
+    </div>
+
+    <details class="sources" id="sources" hidden>
+      <summary>Источники, использованные в проекте</summary>
+      <ul id="source-list"></ul>
+    </details>
+
+    <details class="sources" id="how-to-read" hidden>
+      <summary>Как читать эту демонстрацию</summary>
+      <div class="read-note">
+        <p>
+          <strong>Пометка «заглушка»</strong> — раздел не сформирован:
+          языковая модель на этой машине не подключена. Система не
+          изображает готовый текст, а прямо говорит, что его нет.
+        </p>
+        <p>
+          <strong>Пометка «требует проверки»</strong> — подтвердить
+          утверждение по материалам дела не удалось. Проверка проекта
+          помечает это сама, а не полагается на честность автора.
+        </p>
+        <p>
+          <strong>Ссылки под разделами</strong> — документы, из которых
+          взято содержимое. У резолютивной части ссылки всегда есть:
+          она собирается по правилам, а не моделью, и суммы в ней
+          берутся из материалов, а не выдумываются.
+        </p>
+      </div>
+    </details>
+
+  </section>
+</main>
+
+<footer class="wrap foot">
+  Все данные и модели работают локально. Материалы дела не покидают
+  компьютер: на этом сайте показаны только синтетические материалы
+  демонстрационного дела.
+</footer>
+
+<script src="demo.js"></script>
+</body>
+</html>

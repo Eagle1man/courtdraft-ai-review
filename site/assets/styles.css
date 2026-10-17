@@ -319,3 +319,43 @@ a { color: var(--accent); }
   .topbar, .hero-actions, .backend-status { display: none; }
   body { font-size: 12pt; }
 }
+
+/* ── Блок демонстрации ──────────────────────────────────────────────────
+ *
+ * Оформление блока не украшает страницу, а отвечает на вопрос
+ * заказчика «а что я увижу, если нажму». Поэтому здесь перечислено
+ * конкретное содержимое демо, а оговорка про заглушки вынесена
+ * отдельным блоком и не прячется в мелкий текст: без неё демо
+ * выглядело бы как готовый продукт.
+ */
+.demo-block { background: var(--paper-alt); }
+.demo-block h2 { margin-bottom: .8rem; }
+.demo-lede { color: var(--ink-soft); max-width: 46em; }
+.demo-points {
+  list-style: none;
+  padding: 0;
+  margin: 1.6rem 0 .4rem;
+  display: grid;
+  gap: .9rem;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+}
+.demo-points li {
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 1rem 1.1rem;
+  font-size: .93rem;
+  color: var(--ink-soft);
+}
+.demo-points strong { display: block; color: var(--ink); margin-bottom: .3rem; }
+.demo-caveat {
+  margin-top: 1.6rem;
+  padding: 1rem 1.15rem;
+  background: #fff8e6;
+  border: 1px solid #e6d5a8;
+  border-radius: var(--radius-sm);
+  color: #4a3a10;
+  font-size: .92rem;
+  max-width: 62em;
+}
+.demo-caveat strong { color: #8a5b00; }

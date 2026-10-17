@@ -79,13 +79,9 @@ class Checker(HTMLParser):
                 self.title = stripped
 
 
-def main() -> int:
+def check_page(index: Path) -> list[str]:
+    """Проверить одну страницу: теги, ссылки, ресурсы."""
     problems: list[str] = []
-
-    index = SITE / "index.html"
-    if not index.exists():
-        print(f"НЕТ ФАЙЛА: {index}")
-        return 1
 
     html = index.read_text(encoding="utf-8")
     checker = Checker()
@@ -119,8 +115,12 @@ def main() -> int:
                 problems.append(f"битый якорь {href}")
         elif href.startswith(("http://", "https://", "mailto:", "//")):
             continue
-        elif href.endswith(".css") or href.endswith(".js"):
-            target = SITE / href.lstrip("/")
+        elif href.endswith((".css", ".js", ".json")):
+            # Ссылка на каталог (demo/) — это страница внутри него.
+            if href.endswith("/"):
+                target = SITE / href.strip("/") / "index.html"
+            else:
+                target = SITE / href.lstrip("/")
             if not target.exists():
                 problems.append(f"отсутствует файл {href}")
 
@@ -130,7 +130,14 @@ def main() -> int:
             continue
         if src.startswith("#"):
             continue
-        target = SITE / src.lstrip("/")
+        # Путь внутри сайта указывается относительно этой страницы,
+        # а не от корня: у страницы демо свои файлы.
+        if src.startswith("../"):
+            target = SITE / src[3:]
+        elif "/" in src:
+            target = index.parent / src
+        else:
+            target = index.parent / src
         if not target.exists():
             problems.append(f"отсутствует ресурс {src}")
 
@@ -145,13 +152,27 @@ def main() -> int:
     print(f"  h1               : {checker.h1_count}")
     print()
 
-    if problems:
-        print(f"ПРОБЛЕМЫ ({len(problems)}):")
-        for p in problems:
-            print(f"  - {p}")
+    return problems
+
+
+def main() -> int:
+    pages = sorted(SITE.rglob("*.html"))
+    if not pages:
+        print(f"НЕТ СТРАНИЦ в {SITE}")
         return 1
 
-    print("OK — вёрстка целостна, ссылки и ресурсы на месте.")
+    all_problems: list[str] = []
+    for index in pages:
+        problems = check_page(index)
+        all_problems.extend(f"{index.relative_to(SITE)}: {p}" for p in problems)
+
+    if all_problems:
+        print(f"ПРОБЛЕМЫ ({len(all_problems)}):")
+        for problem in all_problems:
+            print(f"  - {problem}")
+        return 1
+
+    print(f"OK — вёрстка целостна, ссылки и ресурсы на месте ({len(pages)} стр.).")
     return 0
 
 
