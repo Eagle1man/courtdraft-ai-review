@@ -18,7 +18,7 @@ from typing import Any
 
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from app.api.routes import cases, demo, drafts, system
@@ -33,6 +33,26 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)-8s %(name)s: %(message)s",
 )
 logger = logging.getLogger("courtdraft")
+
+
+class _NoCacheStaticFiles(StaticFiles):
+    """Раздача интерфейса без кеширования в браузере.
+
+    Без заголовка Cache-Control браузер применяет эвристическое
+    кеширование и держит старую копию app.js: файл правится, сервер его
+    отдаёт с новым ETag, а браузер показывает старое поведение. На
+    демонстрации это выглядит как «правка не работает», и время уходит
+    на проверку вчерашнего кода.
+
+    На рабочей машине интерфейс открывают с localhost и правят часто, а
+    размер файлов измеряется десятками килобайт — экономить трафик
+    здесь нечего.
+    """
+
+    def file_response(self, *args: object, **kwargs: object) -> Response:
+        response = super().file_response(*args, **kwargs)  # type: ignore[arg-type]
+        response.headers["Cache-Control"] = "no-store, must-revalidate"
+        return response
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -147,7 +167,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # источник происхождения, никакого CORS и отдельного сервера.
         app.mount(
             "/app",
-            StaticFiles(directory=str(cfg.frontend_dir), html=True),
+            _NoCacheStaticFiles(
+                directory=str(cfg.frontend_dir), html=True
+            ),
             name="ui",
         )
     else:
