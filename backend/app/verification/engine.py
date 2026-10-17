@@ -221,6 +221,43 @@ def verify_draft(draft: DraftResult, pack: EvidencePack) -> VerificationReport:
 
     for section in draft.sections:
         text = section.text
+
+        # ── Раздел-заглушка ──────────────────────────────────────
+        #
+        # Заглушка не содержит утверждений: в ней нет ни сумм, ни норм,
+        # ни персон — только пометка о том, что модель не вызывалась.
+        # Проверять её так же, как настоящий текст, бессмысленно и
+        # вредно: номер в служебной пометке заглушки объявлялся
+        # выдумкой модели с пометкой CRITICAL.
+        #
+        # Это выглядело как «система не работает», хотя честная причина
+        # одна: раздел не сформирован. На демонстрации заказчику такая
+        # проверка врёт дважды — выдумки не было и опасности нет.
+        if section.is_mock:
+            report.issues.append(
+                Issue(
+                    type=IssueType.UNSUPPORTED_CLAIM,
+                    severity=Severity.MEDIUM,
+                    text=text[:200],
+                    reason=(
+                        "раздел не сформирован: реальная модель не "
+                        "вызвана, вместо текста — служебная заглушка"
+                    ),
+                    section=section.name,
+                )
+            )
+            if section.error:
+                report.issues.append(
+                    Issue(
+                        type=IssueType.INCOMPLETE,
+                        severity=Severity.HIGH,
+                        text=text[:200],
+                        reason=f"ошибка генерации: {section.error}",
+                        section=section.name,
+                    )
+                )
+            continue
+
         report.claims_checked += 1
 
         # Номера статей из ссылок на нормы — не суммы. Без этого любая
@@ -295,19 +332,7 @@ def verify_draft(draft: DraftResult, pack: EvidencePack) -> VerificationReport:
                     )
                 )
 
-        # ── 5. Раздел сгенерирован заглушкой ──────────────────────
-        if section.is_mock and "MOCK-ОТВЕТ" in text:
-            report.issues.append(
-                Issue(
-                    type=IssueType.UNSUPPORTED_CLAIM,
-                    severity=Severity.MEDIUM,
-                    text=text[:200],
-                    reason="раздел получен от заглушки, реальная модель не вызвана",
-                    section=section.name,
-                )
-            )
-
-        # ── 6. Раздел не удалось сгенерировать ─────────────────────
+        # ── 5. Раздел не удалось сгенерировать ─────────────────────
         if section.error:
             report.issues.append(
                 Issue(
@@ -319,7 +344,7 @@ def verify_draft(draft: DraftResult, pack: EvidencePack) -> VerificationReport:
                 )
             )
 
-        # ── 7. Персоны, которых нет в материалах дела ─────────────
+        # ── 6. Персоны, которых нет в материалах дела ─────────────
         persons, roles = check_section(text, section.name, pack)
 
         for finding in persons:
