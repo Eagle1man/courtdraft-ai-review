@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import json
 import shutil
 import sys
@@ -41,6 +42,7 @@ from app.ingestion.extract import detect_mime_type, extract_text, guess_document
 from app.llm import build_llm_provider  # noqa: E402
 from app.rag.store import CollectionName, VectorStore  # noqa: E402
 from app.services.case_service import CaseService, session_scope  # noqa: E402
+from app.services.draft_service import DraftService  # noqa: E402
 from app.verification.engine import verify_draft  # noqa: E402
 
 DEMO_DIR = BACKEND.parent / "data" / "demo"
@@ -70,7 +72,7 @@ def banner(step: str, title: str, log: object = None) -> None:
     say("=" * 78, log)
 
 
-def reset_output() -> None:
+def reset_output(log: object = None) -> None:
     """Очистить результаты прошлого прогона.
 
     Демо — это демонстрация, а не накопитель данных. Повторный запуск
@@ -100,6 +102,20 @@ def reset_output() -> None:
         # предыдущий результат остаётся доступен.
         for item in OUTPUT_DIR.iterdir():
             if not item.is_file():
+                continue
+            # База демо — не результат, который надо сохранить: она
+            # пересоздаётся с нуля на каждом прогоне. Переносить её в
+            # .previous бессмысленно, а не удалить нельзя — тогда на
+            # втором прогоне демо падает с «дело уже существует».
+            if item.suffix == ".db":
+                try:
+                    item.unlink()
+                except (PermissionError, OSError):
+                    say(f"  ВНИМАНИЕ: {item.name} занят другим процессом.", log)
+                    say("  Остановите сервер (scripts\\stop.ps1) и повторите:",
+                        log)
+                    say("  база демо не будет пересоздана, прогон прерван.", log)
+                    raise SystemExit(1) from None
                 continue
             try:
                 shutil.move(str(item), str(previous / item.name))
@@ -158,7 +174,7 @@ async def run_demo(
     # Демо обязано быть воспроизводимым: каждый запуск начинается с нуля.
     # Иначе второй прогон падает на «дело уже существует», и проверить
     # конвейер повторно невозможно.
-    reset_output()
+    reset_output(log)
 
     settings = make_settings(provider, OUTPUT_DIR)
     settings.ensure_dirs()
@@ -436,6 +452,39 @@ async def run_demo(
     )
     say(f"  json:       {json_path}", log)
 
+    # ── Шаг 9. Демо-стенд: база, на которой открывается интерфейс ──
+    #
+    # Без этого шага база демо остаётся с делами и документами, но без
+    # проекта: интерфейс на ней показывает «Проект не сформирован», и
+    # показывать заказчику нечего. Проект сохраняется ровно тот, что
+    # уже сгенерирован и проверен, — генерация не повторяется.
+    banner("9", "ДЕМО-СТЕНД ДЛЯ ИНТЕРФЕЙСА", log)
+    async with session_scope(factory) as stand_session:
+        service = DraftService(stand_session)
+        stand_draft, stand_version = await service.persist_result(
+            case.id,
+            draft,
+            report,
+            actor="demo",
+        )
+    say(f"  проект сохранён: версия {stand_version.version}", log)
+    say(f"  дело: {case.case_number} · {draft_path.name}", log)
+    say("", log)
+    say("  Открыть интерфейс на этой базе:", log)
+    say(
+        "    cd " + str(BACKEND) + "; "
+        + "$env:DATABASE_URL='sqlite+aiosqlite:///"
+        + str((OUTPUT_DIR / "demo.db").as_posix())
+        + "'; "
+        + ".venv\\Scripts\\python.exe -m uvicorn app.main:app --port 8000",
+        log,
+    )
+    say("  Путь к базе должен быть абсолютным: относительный разрешается", log)
+    say("  от текущего каталога, а сервер запускается из backend.", log)
+    say("", log)
+    say("  И одной командой:", log)
+    say("    powershell -File ..\\scripts\\start-demo.ps1", log)
+
     await engine_ctx.__aexit__(None, None, None)
 
     # ── Итог ────────────────────────────────────────────────────────
@@ -475,6 +524,17 @@ def main() -> int:
         "--log", default="", help="дублировать вывод в файл (UTF-8)"
     )
     args = parser.parse_args()
+
+    # Консоль Windows по умолчанию отдаёт русский текст в cp1251, и
+    # символ вроде «→» или «✓» кодировать нечем: прогон падал с
+    # UnicodeEncodeError посреди вывода. Для показа заказчику это
+    # недопустимо — демонстрация обязана идти до конца на любой машине.
+    #
+    # errors="replace" оставлен на случай символа, которого нет и в
+    # utf-8-консоли: лучше «?» в строке, чем прерванный прогон.
+    for stream in (sys.stdout, sys.stderr):
+        with contextlib.suppress(AttributeError, ValueError, OSError):
+            stream.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union-attr]
 
     # Консоль Windows по умолчанию не печатает кириллицу, поэтому весь
     # отчёт пишется ещё и в файл в UTF-8 — иначе результат невозможно

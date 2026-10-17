@@ -160,6 +160,48 @@ class DraftService:
 
         return draft, version, report, pack
 
+    async def persist_result(
+        self,
+        case_id: uuid.UUID,
+        result: DraftResult,
+        report: VerificationReport,
+        *,
+        template_name: str = "civil_judgment",
+        actor: str = "system",
+    ) -> tuple[Draft, DraftVersion]:
+        """Сохранить уже готовый проект и результат его проверки.
+
+        Нужно демонстрационному прогону: он формирует проект сам, чтобы
+        показать в отчёте время по разделам, и затем обязан сохранить
+        его в базе — иначе база демо остаётся пустой, а интерфейс на
+        ней показывает «Проект не сформирован».
+
+        Генерация при этом не повторяется: сохраняется ровно тот проект,
+        который уже проверен, поэтому демо и интерфейс показывают один
+        и тот же текст, а не результаты двух независимых прогонов.
+        """
+        draft, version = await self._persist(
+            case_id,
+            result,
+            report,
+            template_name=template_name,
+            actor=actor,
+        )
+        await self.audit.log(
+            "draft.generated",
+            case_id=case_id,
+            actor=actor,
+            draft_id=str(draft.id),
+            version=version.version,
+            provider=result.provider,
+            model=result.model,
+            mock=any(s.is_mock for s in result.sections),
+            verification=report.status.value,
+            unsupported=report.unsupported_claims,
+            latency_ms=result.total_latency_ms,
+        )
+        return draft, version
+
     async def _persist(
         self,
         case_id: uuid.UUID,

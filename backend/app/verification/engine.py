@@ -23,6 +23,7 @@ from enum import StrEnum
 
 from app.agents.draft_agent import NEEDS_REVIEW, DraftResult
 from app.agents.evidence_pack import EvidencePack
+from app.drafting.operative import DEFAULT_LEGAL_BASIS
 from app.verification.persons import check_section
 
 
@@ -199,6 +200,54 @@ def _laws_in(text: str) -> set[tuple[str, str]]:
     return found
 
 
+def _is_sum_of(digits: str, backed: set[int]) -> bool:
+    """Сумма ли это из двух-трёх чисел, уже подтверждённых материалами.
+
+    Проверяется только сумма двух и трёх слагаемых: этого хватает для
+    строки «а всего» и для процентов по ключевой ставке, а перебор всех
+    подмножеств при большом числе сумм дал бы неверные совпадения.
+
+    Числа в тексте собраны без ведущих нулей, поэтому и сравнение идёт
+    по целым значениям, а не по строкам.
+    """
+    try:
+        target = int(digits)
+    except ValueError:
+        return False
+
+    values = sorted(backed)
+    for index, first in enumerate(values):
+        if first == target:
+            # Сумма из одного слагаемого — это не сумма: такое число
+            # должно быть подтверждено материалами напрямую.
+            return False
+        for second in values[index + 1 :]:
+            if first + second == target:
+                return True
+            for third in values[index + 2 :]:
+                if first + second + third == target:
+                    return True
+    return False
+
+
+#: Нормы, которые система приводит сама по закону.
+#:
+#: Смысл в том, что подтверждать их материалами дела бессмысленно:
+#: в исковом заявлении судья ст. 198 ГПК не упоминает, она появляется
+#: в самом акте суда. До появления этого списка проверка объявляла
+#: нормативную часть собственной резолюции неподтверждённой — три
+#: замечания HIGH на проекте, собранном по правилам.
+SYSTEM_LAWS: frozenset[tuple[str, str]] = frozenset(
+    {
+        ("198", "ГПК"),  # основание принятия решения
+        ("98", "ГПК"),  # распределение судебных расходов, пошлина в бюджет
+        ("100", "ГПК"),  # расходы на представителя
+        ("233", "ГПК"),  # заочное решение
+        ("321", "ГПК"),  # срок подачи апелляционной жалобы
+    }
+)
+
+
 def verify_draft(draft: DraftResult, pack: EvidencePack) -> VerificationReport:
     """Проверить проект на соответствие материалам дела."""
     report = VerificationReport(sections_checked=len(draft.sections))
@@ -218,6 +267,15 @@ def verify_draft(draft: DraftResult, pack: EvidencePack) -> VerificationReport:
     material_numbers.discard("")
     # Номера частей и пунктов встречаются почти везде.
     small_numbers = {str(i) for i in range(1, 50)}
+
+    # Нормы, которые система цитирует сама, по закону, а не берёт из
+    # материалов дела. Разбор 1 425 гражданских решений: ст. 198 ГПК —
+    # основание принятия решения, 521 документ; «в доход бюджета» — 98
+    # документов (6,9 %), ст. 233 — 87 (заочное решение), ст. 321 — 87
+    # (срок обжалования). Ни одну из них сторона в иске не пишет, поэтому
+    # требовать подтверждения материалами нельзя: система ругалась сама
+    # на собственную резолютивную часть.
+    system_laws = SYSTEM_LAWS | _laws_in(DEFAULT_LEGAL_BASIS)
 
     for section in draft.sections:
         text = section.text
@@ -294,12 +352,22 @@ def verify_draft(draft: DraftResult, pack: EvidencePack) -> VerificationReport:
 
         # ── 3. Числа, которых нет в материалах (главная проверка) ──
         found_numbers = _numbers_in(text)
+        # Числа, которые опираются на материалы дела. Сумма из них —
+        # не выдумка, а арифметика проекта: «а всего» в резолюции
+        # считается системой из уже подтверждённых сумм, и её не может
+        # быть в материалах в готовом виде.
+        backed = {
+            int(number)
+            for number in found_numbers
+            if number in material_numbers
+        }
         invented = {
             number
             for number in found_numbers
             if number not in material_numbers
             and number not in small_numbers
             and number not in law_numbers
+            and not _is_sum_of(number, backed)
         }
         for number in sorted(invented):
             report.unsupported_claims += 1
@@ -318,6 +386,11 @@ def verify_draft(draft: DraftResult, pack: EvidencePack) -> VerificationReport:
 
         # ── 4. Ссылки на нормы без подтверждения ───────────────────
         for article, code in _laws_in(text):
+            if (article, code) in system_laws:
+                # Норма, которую цитирует сама система по закону, а не
+                # берёт из материалов дела. Подтверждать её материалами
+                # бессмысленно: в иске судью ст. 198 ГПК не пишут.
+                continue
             if (article, code) not in material_laws:
                 report.issues.append(
                     Issue(
