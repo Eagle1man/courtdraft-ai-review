@@ -401,3 +401,103 @@ a { color: var(--accent); }
 .plan-note {
   margin-top: .5rem;
 }
+
+/* ── Блок-схема «Как это работает» ───────────────────────────────────
+ *
+ * Прежде здесь был список шагов, и текст в нём ломался: в одной сетке
+ * стояли и номер, и заголовок, и описание, поэтому описание попадало
+ * в колонку шириной номера и ложилось по одному слову в строку.
+ *
+ * Теперь это блок-схема из трёх строк по три шага: видно не только
+ * «какие шаги», но и где кончается подготовка и начинается работа с
+ * основаниями. Стрелки — часть разметки, а не псевдоэлементы: без них
+ * схема не читается с экрана голосового читалки.
+ */
+.flow {
+  margin-top: 2rem;
+  counter-reset: flowstep;
+}
+
+.flow-phase {
+  margin: 0 0 .6rem;
+  font-size: .78rem;
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: .07em;
+  color: var(--ink-faint);
+}
+
+.flow-row {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 1.6rem;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr auto 1fr;
+  gap: .6rem;
+  align-items: stretch;
+}
+
+.flow-step {
+  counter-increment: flowstep;
+  position: relative;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 1rem 1.1rem 1.05rem;
+}
+
+.flow-step .flow-num {
+  display: inline-grid;
+  place-items: center;
+  width: 1.85rem;
+  height: 1.85rem;
+  margin-bottom: .55rem;
+  border-radius: 50%;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 700;
+  font-size: .85rem;
+}
+
+.flow-step h3 {
+  font-size: 1rem;
+  margin: 0 0 .35rem;
+}
+
+.flow-step p {
+  margin: 0;
+  font-size: .9rem;
+  line-height: 1.5;
+  color: var(--ink-soft);
+}
+
+/* Последний шаг — решение человека. Выделен цветом намеренно: весь
+   смысл продукта в том, что решение принимает человек, а не модель. */
+.flow-step--human {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.flow-step--human .flow-num {
+  background: var(--accent);
+  color: #fff;
+}
+
+.flow-arrow {
+  display: grid;
+  place-items: center;
+  color: var(--accent);
+  font-size: 1.3rem;
+  line-height: 1;
+}
+
+@media (max-width: 900px) {
+  .flow-row {
+    grid-template-columns: 1fr;
+  }
+
+  .flow-arrow {
+    transform: rotate(90deg);
+    padding: .2rem 0;
+  }
+}
