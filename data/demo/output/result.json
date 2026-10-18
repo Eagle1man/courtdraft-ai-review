@@ -1,7 +1,7 @@
 {
   "warning": "SYNTHETIC DEMO DATA — НЕ РЕАЛЬНОЕ СУДЕБНОЕ ДЕЛО",
-  "mode": "mock",
-  "model": "mock",
+  "mode": "ollama",
+  "model": "qvikhr",
   "case_number": "DEMO-001",
   "evidence_pack": {
     "case_number": "DEMO-001",
@@ -35,7 +35,7 @@
         "source": "01_claim.txt",
         "document_type": "CLAIM",
         "page": 1,
-        "chunk": "28f570f5-96b5-4654-bd36-acbbbd88e1d3",
+        "chunk": "0069ded2-5c2e-4fa8-a6de-25bcb95b17f6",
         "citation": "01_claim.txt, с. 1",
         "amounts": []
       },
@@ -45,7 +45,7 @@
         "source": "01_claim.txt",
         "document_type": "CLAIM",
         "page": 1,
-        "chunk": "28f570f5-96b5-4654-bd36-acbbbd88e1d3",
+        "chunk": "0069ded2-5c2e-4fa8-a6de-25bcb95b17f6",
         "citation": "01_claim.txt, с. 1",
         "amounts": []
       },
@@ -55,7 +55,7 @@
         "source": "02_response.txt",
         "document_type": "RESPONSE",
         "page": 1,
-        "chunk": "a20ce718-6bf6-4c7c-b09e-7806cd6931d0",
+        "chunk": "d3cba1c9-6712-47bc-8dca-937b684a63dd",
         "citation": "02_response.txt, с. 1",
         "amounts": []
       },
@@ -65,7 +65,7 @@
         "source": "05_protocol.txt",
         "document_type": "PROTOCOL",
         "page": 1,
-        "chunk": "19bbb562-0a29-4285-81c7-ed4bd0693e7e",
+        "chunk": "800aa9b7-ed01-4257-9f01-8e9df37b8eb1",
         "citation": "05_protocol.txt, с. 1",
         "amounts": []
       },
@@ -75,7 +75,7 @@
         "source": "01_claim.txt",
         "document_type": "CLAIM",
         "page": 1,
-        "chunk": "28f570f5-96b5-4654-bd36-acbbbd88e1d3",
+        "chunk": "0069ded2-5c2e-4fa8-a6de-25bcb95b17f6",
         "citation": "01_claim.txt, с. 1",
         "amounts": []
       },
@@ -85,7 +85,7 @@
         "source": "01_claim.txt",
         "document_type": "CLAIM",
         "page": 1,
-        "chunk": "28f570f5-96b5-4654-bd36-acbbbd88e1d3",
+        "chunk": "0069ded2-5c2e-4fa8-a6de-25bcb95b17f6",
         "citation": "01_claim.txt, с. 1",
         "amounts": []
       },
@@ -95,7 +95,7 @@
         "source": "01_claim.txt",
         "document_type": "CLAIM",
         "page": 1,
-        "chunk": "28f570f5-96b5-4654-bd36-acbbbd88e1d3",
+        "chunk": "0069ded2-5c2e-4fa8-a6de-25bcb95b17f6",
         "citation": "01_claim.txt, с. 1",
         "amounts": []
       },
@@ -105,7 +105,7 @@
         "source": "01_claim.txt",
         "document_type": "CLAIM",
         "page": 1,
-        "chunk": "28f570f5-96b5-4654-bd36-acbbbd88e1d3",
+        "chunk": "0069ded2-5c2e-4fa8-a6de-25bcb95b17f6",
         "citation": "01_claim.txt, с. 1",
         "amounts": []
       },
@@ -115,7 +115,7 @@
         "source": "01_claim.txt",
         "document_type": "CLAIM",
         "page": 1,
-        "chunk": "28f570f5-96b5-4654-bd36-acbbbd88e1d3",
+        "chunk": "0069ded2-5c2e-4fa8-a6de-25bcb95b17f6",
         "citation": "01_claim.txt, с. 1",
         "amounts": [
           "150000"
@@ -127,7 +127,7 @@
         "source": "01_claim.txt",
         "document_type": "CLAIM",
         "page": 1,
-        "chunk": "28f570f5-96b5-4654-bd36-acbbbd88e1d3",
+        "chunk": "0069ded2-5c2e-4fa8-a6de-25bcb95b17f6",
         "citation": "01_claim.txt, с. 1",
         "amounts": [
           "5100"
@@ -139,7 +139,7 @@
         "source": "01_claim.txt",
         "document_type": "CLAIM",
         "page": 1,
-        "chunk": "28f570f5-96b5-4654-bd36-acbbbd88e1d3",
+        "chunk": "0069ded2-5c2e-4fa8-a6de-25bcb95b17f6",
         "citation": "01_claim.txt, с. 1",
         "amounts": []
       },
@@ -149,7 +149,7 @@
         "source": "01_claim.txt",
         "document_type": "CLAIM",
         "page": 1,
-        "chunk": "28f570f5-96b5-4654-bd36-acbbbd88e1d3",
+        "chunk": "0069ded2-5c2e-4fa8-a6de-25bcb95b17f6",
         "citation": "01_claim.txt, с. 1",
         "amounts": []
       },
@@ -159,7 +159,7 @@
         "source": "01_claim.txt",
         "document_type": "CLAIM",
         "page": 1,
-        "chunk": "28f570f5-96b5-4654-bd36-acbbbd88e1d3",
+        "chunk": "0069ded2-5c2e-4fa8-a6de-25bcb95b17f6",
         "citation": "01_claim.txt, с. 1",
         "amounts": []
       },
@@ -169,7 +169,7 @@
         "source": "01_claim.txt",
         "document_type": "CLAIM",
         "page": 1,
-        "chunk": "28f570f5-96b5-4654-bd36-acbbbd88e1d3",
+        "chunk": "0069ded2-5c2e-4fa8-a6de-25bcb95b17f6",
         "citation": "01_claim.txt, с. 1",
         "amounts": []
       },
@@ -179,7 +179,7 @@
         "source": "01_claim.txt",
         "document_type": "CLAIM",
         "page": 1,
-        "chunk": "28f570f5-96b5-4654-bd36-acbbbd88e1d3",
+        "chunk": "0069ded2-5c2e-4fa8-a6de-25bcb95b17f6",
         "citation": "01_claim.txt, с. 1",
         "amounts": []
       },
@@ -189,7 +189,7 @@
         "source": "01_claim.txt",
         "document_type": "CLAIM",
         "page": 1,
-        "chunk": "28f570f5-96b5-4654-bd36-acbbbd88e1d3",
+        "chunk": "0069ded2-5c2e-4fa8-a6de-25bcb95b17f6",
         "citation": "01_claim.txt, с. 1",
         "amounts": [
           "150000"
@@ -201,7 +201,7 @@
         "source": "01_claim.txt",
         "document_type": "CLAIM",
         "page": 1,
-        "chunk": "28f570f5-96b5-4654-bd36-acbbbd88e1d3",
+        "chunk": "0069ded2-5c2e-4fa8-a6de-25bcb95b17f6",
         "citation": "01_claim.txt, с. 1",
         "amounts": []
       },
@@ -211,7 +211,7 @@
         "source": "01_claim.txt",
         "document_type": "CLAIM",
         "page": 1,
-        "chunk": "28f570f5-96b5-4654-bd36-acbbbd88e1d3",
+        "chunk": "0069ded2-5c2e-4fa8-a6de-25bcb95b17f6",
         "citation": "01_claim.txt, с. 1",
         "amounts": []
       },
@@ -221,7 +221,7 @@
         "source": "01_claim.txt",
         "document_type": "CLAIM",
         "page": 1,
-        "chunk": "28f570f5-96b5-4654-bd36-acbbbd88e1d3",
+        "chunk": "0069ded2-5c2e-4fa8-a6de-25bcb95b17f6",
         "citation": "01_claim.txt, с. 1",
         "amounts": [
           "150000"
@@ -233,7 +233,7 @@
         "source": "01_claim.txt",
         "document_type": "CLAIM",
         "page": 1,
-        "chunk": "28f570f5-96b5-4654-bd36-acbbbd88e1d3",
+        "chunk": "0069ded2-5c2e-4fa8-a6de-25bcb95b17f6",
         "citation": "01_claim.txt, с. 1",
         "amounts": []
       },
@@ -243,7 +243,7 @@
         "source": "01_claim.txt",
         "document_type": "CLAIM",
         "page": 1,
-        "chunk": "28f570f5-96b5-4654-bd36-acbbbd88e1d3",
+        "chunk": "0069ded2-5c2e-4fa8-a6de-25bcb95b17f6",
         "citation": "01_claim.txt, с. 1",
         "amounts": []
       },
@@ -253,7 +253,7 @@
         "source": "01_claim.txt",
         "document_type": "CLAIM",
         "page": 1,
-        "chunk": "28f570f5-96b5-4654-bd36-acbbbd88e1d3",
+        "chunk": "0069ded2-5c2e-4fa8-a6de-25bcb95b17f6",
         "citation": "01_claim.txt, с. 1",
         "amounts": []
       },
@@ -263,7 +263,7 @@
         "source": "01_claim.txt",
         "document_type": "CLAIM",
         "page": 1,
-        "chunk": "28f570f5-96b5-4654-bd36-acbbbd88e1d3",
+        "chunk": "0069ded2-5c2e-4fa8-a6de-25bcb95b17f6",
         "citation": "01_claim.txt, с. 1",
         "amounts": []
       },
@@ -273,7 +273,7 @@
         "source": "01_claim.txt",
         "document_type": "CLAIM",
         "page": 1,
-        "chunk": "28f570f5-96b5-4654-bd36-acbbbd88e1d3",
+        "chunk": "0069ded2-5c2e-4fa8-a6de-25bcb95b17f6",
         "citation": "01_claim.txt, с. 1",
         "amounts": [
           "150000"
@@ -285,7 +285,7 @@
         "source": "01_claim.txt",
         "document_type": "CLAIM",
         "page": 1,
-        "chunk": "28f570f5-96b5-4654-bd36-acbbbd88e1d3",
+        "chunk": "0069ded2-5c2e-4fa8-a6de-25bcb95b17f6",
         "citation": "01_claim.txt, с. 1",
         "amounts": [
           "5100"
@@ -297,7 +297,7 @@
         "source": "01_claim.txt",
         "document_type": "CLAIM",
         "page": 1,
-        "chunk": "28f570f5-96b5-4654-bd36-acbbbd88e1d3",
+        "chunk": "0069ded2-5c2e-4fa8-a6de-25bcb95b17f6",
         "citation": "01_claim.txt, с. 1",
         "amounts": []
       },
@@ -307,7 +307,7 @@
         "source": "01_claim.txt",
         "document_type": "CLAIM",
         "page": 1,
-        "chunk": "28f570f5-96b5-4654-bd36-acbbbd88e1d3",
+        "chunk": "0069ded2-5c2e-4fa8-a6de-25bcb95b17f6",
         "citation": "01_claim.txt, с. 1",
         "amounts": []
       },
@@ -317,7 +317,7 @@
         "source": "01_claim.txt",
         "document_type": "CLAIM",
         "page": 1,
-        "chunk": "28f570f5-96b5-4654-bd36-acbbbd88e1d3",
+        "chunk": "0069ded2-5c2e-4fa8-a6de-25bcb95b17f6",
         "citation": "01_claim.txt, с. 1",
         "amounts": []
       },
@@ -327,7 +327,7 @@
         "source": "01_claim.txt",
         "document_type": "CLAIM",
         "page": 1,
-        "chunk": "28f570f5-96b5-4654-bd36-acbbbd88e1d3",
+        "chunk": "0069ded2-5c2e-4fa8-a6de-25bcb95b17f6",
         "citation": "01_claim.txt, с. 1",
         "amounts": []
       },
@@ -337,7 +337,7 @@
         "source": "05_protocol.txt",
         "document_type": "PROTOCOL",
         "page": 1,
-        "chunk": "19bbb562-0a29-4285-81c7-ed4bd0693e7e",
+        "chunk": "800aa9b7-ed01-4257-9f01-8e9df37b8eb1",
         "citation": "05_protocol.txt, с. 1",
         "amounts": []
       },
@@ -347,7 +347,7 @@
         "source": "05_protocol.txt",
         "document_type": "PROTOCOL",
         "page": 1,
-        "chunk": "19bbb562-0a29-4285-81c7-ed4bd0693e7e",
+        "chunk": "800aa9b7-ed01-4257-9f01-8e9df37b8eb1",
         "citation": "05_protocol.txt, с. 1",
         "amounts": []
       },
@@ -357,7 +357,7 @@
         "source": "05_protocol.txt",
         "document_type": "PROTOCOL",
         "page": 1,
-        "chunk": "19bbb562-0a29-4285-81c7-ed4bd0693e7e",
+        "chunk": "800aa9b7-ed01-4257-9f01-8e9df37b8eb1",
         "citation": "05_protocol.txt, с. 1",
         "amounts": []
       },
@@ -367,7 +367,7 @@
         "source": "05_protocol.txt",
         "document_type": "PROTOCOL",
         "page": 1,
-        "chunk": "19bbb562-0a29-4285-81c7-ed4bd0693e7e",
+        "chunk": "800aa9b7-ed01-4257-9f01-8e9df37b8eb1",
         "citation": "05_protocol.txt, с. 1",
         "amounts": []
       },
@@ -377,7 +377,7 @@
         "source": "05_protocol.txt",
         "document_type": "PROTOCOL",
         "page": 1,
-        "chunk": "19bbb562-0a29-4285-81c7-ed4bd0693e7e",
+        "chunk": "800aa9b7-ed01-4257-9f01-8e9df37b8eb1",
         "citation": "05_protocol.txt, с. 1",
         "amounts": []
       },
@@ -387,7 +387,7 @@
         "source": "05_protocol.txt",
         "document_type": "PROTOCOL",
         "page": 1,
-        "chunk": "19bbb562-0a29-4285-81c7-ed4bd0693e7e",
+        "chunk": "800aa9b7-ed01-4257-9f01-8e9df37b8eb1",
         "citation": "05_protocol.txt, с. 1",
         "amounts": []
       },
@@ -397,7 +397,7 @@
         "source": "05_protocol.txt",
         "document_type": "PROTOCOL",
         "page": 1,
-        "chunk": "19bbb562-0a29-4285-81c7-ed4bd0693e7e",
+        "chunk": "800aa9b7-ed01-4257-9f01-8e9df37b8eb1",
         "citation": "05_protocol.txt, с. 1",
         "amounts": []
       },
@@ -407,7 +407,7 @@
         "source": "05_protocol.txt",
         "document_type": "PROTOCOL",
         "page": 1,
-        "chunk": "19bbb562-0a29-4285-81c7-ed4bd0693e7e",
+        "chunk": "800aa9b7-ed01-4257-9f01-8e9df37b8eb1",
         "citation": "05_protocol.txt, с. 1",
         "amounts": []
       },
@@ -417,7 +417,7 @@
         "source": "05_protocol.txt",
         "document_type": "PROTOCOL",
         "page": 1,
-        "chunk": "19bbb562-0a29-4285-81c7-ed4bd0693e7e",
+        "chunk": "800aa9b7-ed01-4257-9f01-8e9df37b8eb1",
         "citation": "05_protocol.txt, с. 1",
         "amounts": []
       },
@@ -427,7 +427,7 @@
         "source": "05_protocol.txt",
         "document_type": "PROTOCOL",
         "page": 1,
-        "chunk": "19bbb562-0a29-4285-81c7-ed4bd0693e7e",
+        "chunk": "800aa9b7-ed01-4257-9f01-8e9df37b8eb1",
         "citation": "05_protocol.txt, с. 1",
         "amounts": []
       },
@@ -437,7 +437,7 @@
         "source": "05_protocol.txt",
         "document_type": "PROTOCOL",
         "page": 1,
-        "chunk": "19bbb562-0a29-4285-81c7-ed4bd0693e7e",
+        "chunk": "800aa9b7-ed01-4257-9f01-8e9df37b8eb1",
         "citation": "05_protocol.txt, с. 1",
         "amounts": []
       },
@@ -447,7 +447,7 @@
         "source": "05_protocol.txt",
         "document_type": "PROTOCOL",
         "page": 1,
-        "chunk": "19bbb562-0a29-4285-81c7-ed4bd0693e7e",
+        "chunk": "800aa9b7-ed01-4257-9f01-8e9df37b8eb1",
         "citation": "05_protocol.txt, с. 1",
         "amounts": []
       },
@@ -457,7 +457,7 @@
         "source": "05_protocol.txt",
         "document_type": "PROTOCOL",
         "page": 1,
-        "chunk": "19bbb562-0a29-4285-81c7-ed4bd0693e7e",
+        "chunk": "800aa9b7-ed01-4257-9f01-8e9df37b8eb1",
         "citation": "05_protocol.txt, с. 1",
         "amounts": []
       },
@@ -467,7 +467,7 @@
         "source": "05_protocol.txt",
         "document_type": "PROTOCOL",
         "page": 1,
-        "chunk": "19bbb562-0a29-4285-81c7-ed4bd0693e7e",
+        "chunk": "800aa9b7-ed01-4257-9f01-8e9df37b8eb1",
         "citation": "05_protocol.txt, с. 1",
         "amounts": []
       },
@@ -477,7 +477,7 @@
         "source": "01_claim.txt",
         "document_type": "CLAIM",
         "page": 1,
-        "chunk": "28f570f5-96b5-4654-bd36-acbbbd88e1d3",
+        "chunk": "0069ded2-5c2e-4fa8-a6de-25bcb95b17f6",
         "citation": "01_claim.txt, с. 1",
         "amounts": []
       },
@@ -487,7 +487,7 @@
         "source": "01_claim.txt",
         "document_type": "CLAIM",
         "page": 1,
-        "chunk": "28f570f5-96b5-4654-bd36-acbbbd88e1d3",
+        "chunk": "0069ded2-5c2e-4fa8-a6de-25bcb95b17f6",
         "citation": "01_claim.txt, с. 1",
         "amounts": []
       },
@@ -497,7 +497,7 @@
         "source": "01_claim.txt",
         "document_type": "CLAIM",
         "page": 1,
-        "chunk": "28f570f5-96b5-4654-bd36-acbbbd88e1d3",
+        "chunk": "0069ded2-5c2e-4fa8-a6de-25bcb95b17f6",
         "citation": "01_claim.txt, с. 1",
         "amounts": []
       },
@@ -507,7 +507,7 @@
         "source": "01_claim.txt",
         "document_type": "CLAIM",
         "page": 1,
-        "chunk": "28f570f5-96b5-4654-bd36-acbbbd88e1d3",
+        "chunk": "0069ded2-5c2e-4fa8-a6de-25bcb95b17f6",
         "citation": "01_claim.txt, с. 1",
         "amounts": []
       },
@@ -517,28 +517,28 @@
         "source": "02_response.txt",
         "document_type": "RESPONSE",
         "page": 1,
-        "chunk": "a20ce718-6bf6-4c7c-b09e-7806cd6931d0",
+        "chunk": "d3cba1c9-6712-47bc-8dca-937b684a63dd",
         "citation": "02_response.txt, с. 1",
         "amounts": []
       }
     ]
   },
   "draft": {
-    "text": "ВВОДНАЯ ЧАСТЬ\n\n[MOCK-ОТВЕТ] Реальная модель не вызывалась (режим LLM_PROVIDER=mock). Это заглушка для проверки конвейера. ref=32535 Любое утверждение из этого текста не является установленным фактом.\n\nОПИСАТЕЛЬНАЯ ЧАСТЬ\n\n[MOCK-ОТВЕТ] Реальная модель не вызывалась (режим LLM_PROVIDER=mock). Это заглушка для проверки конвейера. ref=74648 Любое утверждение из этого текста не является установленным фактом.\n\nУСТАНОВИЛ\n\n[MOCK-ОТВЕТ] Реальная модель не вызывалась (режим LLM_PROVIDER=mock). Это заглушка для проверки конвейера. ref=07615 Любое утверждение из этого текста не является установленным фактом.\n\nМОТИВИРОВОЧНАЯ ЧАСТЬ\n\n[MOCK-ОТВЕТ] Реальная модель не вызывалась (режим LLM_PROVIDER=mock). Это заглушка для проверки конвейера. ref=21706 Любое утверждение из этого текста не является установленным фактом.\n\nРЕШИЛ\n\nРуководствуясь ст. 198 ГПК РФ, суд решил:\n1. Удовлетворить исковые требования истца в полном объёме: взыскать с Фирма «Вымышленная Строй» в пользу Образцов Пётр Петрович 150 000 руб. 00 коп. (задолженность по договору, 01_claim.txt).\n2. Взыскать с Фирма «Вымышленная Строй» ТРЕБУЕТ ПРОВЕРКИ СПЕЦИАЛИСТОМ (доход бюджета) государственную пошлину в размере 5 100 руб. 00 коп. (ст. 98 ГПК РФ).\n3. Всего подлежит взысканию 155 100 (сто пятьдесят пять тысяч сто) руб. 00 коп.\n4. Решение может быть обжаловано в апелляционном порядке в течение месяца со дня принятия решения в окончательной форме, если иные сроки не установлены настоящим Кодексом (ст. 321 ГПК РФ).\n\nТРЕБУЕТ ПРОВЕРКИ СПЕЦИАЛИСТОМ: не установлен бюджет, в доход которого взыскивается государственная пошлина\n\nТребования, которые не удалось отнести к установленным основаниям, требуют проверки специалистом:\n— нет данных: установленные обстоятельства.",
+    "text": "ВВОДНАЯ ЧАСТЬ\n\nТребуется проверка специалистом.\n\nОПИСАТЕЛЬНАЯ ЧАСТЬ\n\nOkay, let's tackle this. The user wants the \"Описательная часть\" of the court decision. The key points are the circumstances and evidence provided in the materials. \n\nFirst, I need to look through the materials listed. The main claims are about recovering 150,000 rubles from the defendant, and the court has to decide on the validity of these claims. The objections mention the defendant's counterclaims about the product's quality. \n\nThe evidence includes a claim about a debt under a supply contract, which the plaintiff is asking to be enforced. The court also has to consider the defendant's objection that the product was defective. \n\nWait, the materials mention the defendant's objection about the product's quality, but the evidence shows the plaintiff's claim about the debt. So the court needs to check if the product's defect is a valid counterclaim. \n\nBut the materials don't specify the exact terms of the supply contract. The plaintiff's claim is about a debt, but the defendant's objection is about the product's quality. The court has to determine if the product's defect is a valid counterclaim. \n\nHowever, the materials don't provide the contract details. The plaintiff's claim is based on a debt, but the defendant's objection is about the product's quality. The court needs to check if the product's defect is a valid counterclaim. \n\nSince the materials don't mention the contract terms, the court might need to check if the product's defect is a valid counterclaim. But the materials don't specify the exact terms of the contract. \n\nWait, the materials mention the defendant's objection in the protocol, but the evidence includes the claim about the debt. The court has to decide if the product's defect is a valid counterclaim. \n\nBut the materials don't provide the contract details. The plaintiff's claim is about a debt, but the defendant's objection is about the product's quality. The court needs to check if the product's defect is a valid counterclaim. \n\nSince the materials don't specify the contract terms\n\n[текст оборван по лимиту ответа] ТРЕБУЕТ ПРОВЕРКИ СПЕЦИАЛИСТОМ\n\nУСТАНОВИЛ\n\nИстец Образцов Пётр Петрович, заявивший в Демонстрационный районный суд г. Образцова о взыскании задолженности по договору поставки, подтверждает факт заключения договора с ответчиком Фирмой «Вымышленная Строй» на 20 июня 2026 года. Сумма задолженности, указанная в иске, составляет 150 000 руб., что соответствует данным из документа 01_claim.txt, с. 1. Доказательством является перечень документов, включая договор поставки, поданный в суд. Ответчик не представил аргументы, опровергающие факт задолженности, и не указал причины, почему сумма иска не соответствует фактическим расходам. Суд установил, что требования истца обоснованы, так как договор подписан в установленной форме, и ответчик не доказал, что он не виноват в задолженности. Норма права, регулирующая обязательства сторон в договоре, не найдена в материалах дела. Требуется проверка специалистом.\n\nМОТИВИРОВОЧНАЯ ЧАСТЬ\n\nХорошо, давайте разберемся с разделом \"Мотивировочная часть\" решения суда. Начну с того, что в материале указаны статьи ГК РФ, которые могут быть связаны с исполнением обязательств и неустойкой. Статья 309 говорит о обязанности исполнения, 310 — о неустойке, 314 — о сроке исполнения, 779 и 781 — о последствиях невыполнения. Также упомянуты ГПК РФ, статьи 131 и 132, а также ГПК РФ, статья 41. \n\nТеперь нужно проверить, есть ли конкретные нормы, которые бы прямо указывали на ответственность за невыполнение обязательств или неустойку. В материалах есть ссылки на статьи, но нет прямых формулировок. Например, статья 309 ГК РФ говорит, что обязательства должны быть исполнены, но не уточняет, кто несет ответственность за их невыполнение. Аналогично, статья 310 устанавливает неустойку, но не определяет, кто её платит. \n\nТакже в материалах упоминается статья 41 ГПК РФ, которая регулирует споры о неисполнении обязательств, но не конкретизирует ответственность. В целом, в предоставленных материалах нет прямых норм, которые бы прямо указывали на ответственность за невыполнение обязательств или неустойку. Суд должен учитывать, что в материалах нет конкретных норм, которые бы позволили суду прийти к определенному выводу. \n\nТакже есть информация о том\n\n[текст оборван по лимиту ответа] ТРЕБУЕТ ПРОВЕРКИ СПЕЦИАЛИСТОМ\n\nРЕШИЛ\n\nРуководствуясь ст. 198 ГПК РФ, суд решил:\n1. Удовлетворить исковые требования истца в полном объёме: взыскать с Фирма «Вымышленная Строй» в пользу Образцов Пётр Петрович 150 000 руб. 00 коп. (задолженность по договору, 01_claim.txt).\n2. Взыскать с Фирма «Вымышленная Строй» ТРЕБУЕТ ПРОВЕРКИ СПЕЦИАЛИСТОМ (доход бюджета) государственную пошлину в размере 5 100 руб. 00 коп. (ст. 98 ГПК РФ).\n3. Всего подлежит взысканию 155 100 (сто пятьдесят пять тысяч сто) руб. 00 коп.\n4. Решение может быть обжаловано в апелляционном порядке в течение месяца со дня принятия решения в окончательной форме, если иные сроки не установлены настоящим Кодексом (ст. 321 ГПК РФ).\n\nТРЕБУЕТ ПРОВЕРКИ СПЕЦИАЛИСТОМ: не установлен бюджет, в доход которого взыскивается государственная пошлина\n\nТребования, которые не удалось отнести к установленным основаниям, требуют проверки специалистом:\n— нет данных: установленные обстоятельства.",
     "sections": [
       {
         "key": "introductory",
         "name": "Вводная часть",
-        "text": "[MOCK-ОТВЕТ] Реальная модель не вызывалась (режим LLM_PROVIDER=mock). Это заглушка для проверки конвейера. ref=32535 Любое утверждение из этого текста не является установленным фактом.",
-        "is_mock": true,
-        "needs_review": true,
+        "text": "Требуется проверка специалистом.",
+        "is_mock": false,
+        "needs_review": false,
         "citations": []
       },
       {
         "key": "descriptive",
         "name": "Описательная часть",
-        "text": "[MOCK-ОТВЕТ] Реальная модель не вызывалась (режим LLM_PROVIDER=mock). Это заглушка для проверки конвейера. ref=74648 Любое утверждение из этого текста не является установленным фактом.",
-        "is_mock": true,
+        "text": "Okay, let's tackle this. The user wants the \"Описательная часть\" of the court decision. The key points are the circumstances and evidence provided in the materials. \n\nFirst, I need to look through the materials listed. The main claims are about recovering 150,000 rubles from the defendant, and the court has to decide on the validity of these claims. The objections mention the defendant's counterclaims about the product's quality. \n\nThe evidence includes a claim about a debt under a supply contract, which the plaintiff is asking to be enforced. The court also has to consider the defendant's objection that the product was defective. \n\nWait, the materials mention the defendant's objection about the product's quality, but the evidence shows the plaintiff's claim about the debt. So the court needs to check if the product's defect is a valid counterclaim. \n\nBut the materials don't specify the exact terms of the supply contract. The plaintiff's claim is about a debt, but the defendant's objection is about the product's quality. The court has to determine if the product's defect is a valid counterclaim. \n\nHowever, the materials don't provide the contract details. The plaintiff's claim is based on a debt, but the defendant's objection is about the product's quality. The court needs to check if the product's defect is a valid counterclaim. \n\nSince the materials don't mention the contract terms, the court might need to check if the product's defect is a valid counterclaim. But the materials don't specify the exact terms of the contract. \n\nWait, the materials mention the defendant's objection in the protocol, but the evidence includes the claim about the debt. The court has to decide if the product's defect is a valid counterclaim. \n\nBut the materials don't provide the contract details. The plaintiff's claim is about a debt, but the defendant's objection is about the product's quality. The court needs to check if the product's defect is a valid counterclaim. \n\nSince the materials don't specify the contract terms\n\n[текст оборван по лимиту ответа] ТРЕБУЕТ ПРОВЕРКИ СПЕЦИАЛИСТОМ",
+        "is_mock": false,
         "needs_review": true,
         "citations": [
           "01_claim.txt, с. 1",
@@ -549,9 +549,9 @@
       {
         "key": "established",
         "name": "УСТАНОВИЛ",
-        "text": "[MOCK-ОТВЕТ] Реальная модель не вызывалась (режим LLM_PROVIDER=mock). Это заглушка для проверки конвейера. ref=07615 Любое утверждение из этого текста не является установленным фактом.",
-        "is_mock": true,
-        "needs_review": true,
+        "text": "Истец Образцов Пётр Петрович, заявивший в Демонстрационный районный суд г. Образцова о взыскании задолженности по договору поставки, подтверждает факт заключения договора с ответчиком Фирмой «Вымышленная Строй» на 20 июня 2026 года. Сумма задолженности, указанная в иске, составляет 150 000 руб., что соответствует данным из документа 01_claim.txt, с. 1. Доказательством является перечень документов, включая договор поставки, поданный в суд. Ответчик не представил аргументы, опровергающие факт задолженности, и не указал причины, почему сумма иска не соответствует фактическим расходам. Суд установил, что требования истца обоснованы, так как договор подписан в установленной форме, и ответчик не доказал, что он не виноват в задолженности. Норма права, регулирующая обязательства сторон в договоре, не найдена в материалах дела. Требуется проверка специалистом.",
+        "is_mock": false,
+        "needs_review": false,
         "citations": [
           "01_claim.txt, с. 1"
         ]
@@ -559,8 +559,8 @@
       {
         "key": "motivating",
         "name": "Мотивировочная часть",
-        "text": "[MOCK-ОТВЕТ] Реальная модель не вызывалась (режим LLM_PROVIDER=mock). Это заглушка для проверки конвейера. ref=21706 Любое утверждение из этого текста не является установленным фактом.",
-        "is_mock": true,
+        "text": "Хорошо, давайте разберемся с разделом \"Мотивировочная часть\" решения суда. Начну с того, что в материале указаны статьи ГК РФ, которые могут быть связаны с исполнением обязательств и неустойкой. Статья 309 говорит о обязанности исполнения, 310 — о неустойке, 314 — о сроке исполнения, 779 и 781 — о последствиях невыполнения. Также упомянуты ГПК РФ, статьи 131 и 132, а также ГПК РФ, статья 41. \n\nТеперь нужно проверить, есть ли конкретные нормы, которые бы прямо указывали на ответственность за невыполнение обязательств или неустойку. В материалах есть ссылки на статьи, но нет прямых формулировок. Например, статья 309 ГК РФ говорит, что обязательства должны быть исполнены, но не уточняет, кто несет ответственность за их невыполнение. Аналогично, статья 310 устанавливает неустойку, но не определяет, кто её платит. \n\nТакже в материалах упоминается статья 41 ГПК РФ, которая регулирует споры о неисполнении обязательств, но не конкретизирует ответственность. В целом, в предоставленных материалах нет прямых норм, которые бы прямо указывали на ответственность за невыполнение обязательств или неустойку. Суд должен учитывать, что в материалах нет конкретных норм, которые бы позволили суду прийти к определенному выводу. \n\nТакже есть информация о том\n\n[текст оборван по лимиту ответа] ТРЕБУЕТ ПРОВЕРКИ СПЕЦИАЛИСТОМ",
+        "is_mock": false,
         "needs_review": true,
         "citations": [
           "01_claim.txt, с. 1",
@@ -589,31 +589,66 @@
     "status": "REVIEW_REQUIRED",
     "issues": [
       {
-        "type": "UNSUPPORTED_CLAIM",
-        "severity": "MEDIUM",
-        "text": "[MOCK-ОТВЕТ] Реальная модель не вызывалась (режим LLM_PROVIDER=mock). Это заглушка для проверки конвейера. ref=32535 Любое утверждение из этого текста не является установленным фактом.",
-        "reason": "раздел не сформирован: реальная модель не вызвана, вместо текста — служебная заглушка",
+        "type": "MISSING_SOURCE",
+        "severity": "HIGH",
+        "text": "Требуется проверка специалистом.",
+        "reason": "в материалах дела нет данных для раздела «Вводная часть»",
         "section": "Вводная часть"
       },
       {
-        "type": "UNSUPPORTED_CLAIM",
+        "type": "INCOMPLETE",
         "severity": "MEDIUM",
-        "text": "[MOCK-ОТВЕТ] Реальная модель не вызывалась (режим LLM_PROVIDER=mock). Это заглушка для проверки конвейера. ref=74648 Любое утверждение из этого текста не является установленным фактом.",
-        "reason": "раздел не сформирован: реальная модель не вызвана, вместо текста — служебная заглушка",
+        "text": "Okay, let's tackle this. The user wants the \"Описательная часть\" of the court decision. The key points are the circumstances and evidence provided in the materials. \n\nFirst, I need to look through the",
+        "reason": "раздел помечен как требующий проверки специалистом",
         "section": "Описательная часть"
       },
       {
         "type": "UNSUPPORTED_CLAIM",
+        "severity": "CRITICAL",
+        "text": "Okay, let's tackle this. The user wants the \"Описательная часть\" of the court decision. The key points are the circumstances and evidence provided in the materials. \n\nFirst, I need to look through the",
+        "reason": "число 150 отсутствует в материалах дела — возможна выдумка модели",
+        "section": "Описательная часть"
+      },
+      {
+        "type": "INCOMPLETE",
         "severity": "MEDIUM",
-        "text": "[MOCK-ОТВЕТ] Реальная модель не вызывалась (режим LLM_PROVIDER=mock). Это заглушка для проверки конвейера. ref=07615 Любое утверждение из этого текста не является установленным фактом.",
-        "reason": "раздел не сформирован: реальная модель не вызвана, вместо текста — служебная заглушка",
-        "section": "УСТАНОВИЛ"
+        "text": "Хорошо, давайте разберемся с разделом \"Мотивировочная часть\" решения суда. Начну с того, что в материале указаны статьи ГК РФ, которые могут быть связаны с исполнением обязательств и неустойкой. Стать",
+        "reason": "раздел помечен как требующий проверки специалистом",
+        "section": "Мотивировочная часть"
       },
       {
         "type": "UNSUPPORTED_CLAIM",
-        "severity": "MEDIUM",
-        "text": "[MOCK-ОТВЕТ] Реальная модель не вызывалась (режим LLM_PROVIDER=mock). Это заглушка для проверки конвейера. ref=21706 Любое утверждение из этого текста не является установленным фактом.",
-        "reason": "раздел не сформирован: реальная модель не вызвана, вместо текста — служебная заглушка",
+        "severity": "CRITICAL",
+        "text": "Хорошо, давайте разберемся с разделом \"Мотивировочная часть\" решения суда. Начну с того, что в материале указаны статьи ГК РФ, которые могут быть связаны с исполнением обязательств и неустойкой. Стать",
+        "reason": "число 309 отсутствует в материалах дела — возможна выдумка модели",
+        "section": "Мотивировочная часть"
+      },
+      {
+        "type": "UNSUPPORTED_CLAIM",
+        "severity": "CRITICAL",
+        "text": "Хорошо, давайте разберемся с разделом \"Мотивировочная часть\" решения суда. Начну с того, что в материале указаны статьи ГК РФ, которые могут быть связаны с исполнением обязательств и неустойкой. Стать",
+        "reason": "число 310 отсутствует в материалах дела — возможна выдумка модели",
+        "section": "Мотивировочная часть"
+      },
+      {
+        "type": "UNSUPPORTED_CLAIM",
+        "severity": "CRITICAL",
+        "text": "Хорошо, давайте разберемся с разделом \"Мотивировочная часть\" решения суда. Начну с того, что в материале указаны статьи ГК РФ, которые могут быть связаны с исполнением обязательств и неустойкой. Стать",
+        "reason": "число 314 отсутствует в материалах дела — возможна выдумка модели",
+        "section": "Мотивировочная часть"
+      },
+      {
+        "type": "UNSUPPORTED_CLAIM",
+        "severity": "CRITICAL",
+        "text": "Хорошо, давайте разберемся с разделом \"Мотивировочная часть\" решения суда. Начну с того, что в материале указаны статьи ГК РФ, которые могут быть связаны с исполнением обязательств и неустойкой. Стать",
+        "reason": "число 779 отсутствует в материалах дела — возможна выдумка модели",
+        "section": "Мотивировочная часть"
+      },
+      {
+        "type": "UNSUPPORTED_CLAIM",
+        "severity": "CRITICAL",
+        "text": "Хорошо, давайте разберемся с разделом \"Мотивировочная часть\" решения суда. Начну с того, что в материале указаны статьи ГК РФ, которые могут быть связаны с исполнением обязательств и неустойкой. Стать",
+        "reason": "число 781 отсутствует в материалах дела — возможна выдумка модели",
         "section": "Мотивировочная часть"
       },
       {
@@ -625,10 +660,12 @@
       }
     ],
     "sections_checked": 5,
-    "claims_checked": 1,
-    "unsupported_claims": 0,
+    "claims_checked": 5,
+    "unsupported_claims": 6,
     "by_severity": {
-      "MEDIUM": 5
+      "HIGH": 1,
+      "MEDIUM": 3,
+      "CRITICAL": 6
     }
   },
   "rules": {

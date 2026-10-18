@@ -139,7 +139,27 @@ def reset_output(log: object = None) -> None:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 
-def make_settings(provider: str, workdir: Path) -> Settings:
+def _model_from_env() -> str:
+    """Модель из .env — та же, на которой работает приложение.
+
+    Раньше в make_settings было зашито «qwen2.5:1.5b», и демо тихо
+    показывало работу другой модели, чем та, что стоит в системе.
+    Заметно это становилось только по подписи в отчёте — то есть после
+    того, как демо уже показали.
+    """
+    env_file = BACKEND.parent / ".env"
+    if not env_file.exists():
+        return "qwen2.5:1.5b"
+    for line in env_file.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if stripped.startswith("OLLAMA_MODEL="):
+            value = stripped.split("=", 1)[1].strip().strip('"')
+            if value:
+                return value
+    return "qwen2.5:1.5b"
+
+
+def make_settings(provider: str, workdir: Path, model: str = "") -> Settings:
     """Настройки прогона. БД и индекс — во временном каталоге.
 
     Эмбеддинги берутся из настроек, а не задаются заглушкой: на прогоне
@@ -159,7 +179,7 @@ def make_settings(provider: str, workdir: Path) -> Settings:
         llm_provider=llm,
         embedding_provider=embeddings,
         ollama_enabled=provider != "mock",
-        ollama_model="qwen2.5:1.5b",
+        ollama_model=model or _model_from_env(),
         ollama_base_url="http://127.0.0.1:11434",
         ollama_timeout_sec=1800,
         ollama_num_ctx=2048,
