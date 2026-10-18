@@ -24,6 +24,7 @@ from typing import Any
 
 from app.agents.evidence_pack import EvidencePack
 from app.config import Settings, get_settings
+from app.drafting.section_quality import not_formed_text, unusable_reason
 from app.llm import build_llm_provider
 from app.llm.base import LLMMessage, LLMProvider, LLMRequest, LLMRole
 
@@ -500,6 +501,17 @@ async def generate_draft(
         try:
             response = await llm.generate(request)
             text, needs_review = _postprocess(response.text, section)
+            # Ответ модели может оказаться не текстом раздела, а её
+            # рассуждениями или повтором одной фразы. В проект решения
+            # такое попадать не должно: вместо мусора ставится честная
+            # отметка с причиной.
+            reason = unusable_reason(text)
+            error = ""
+            if reason:
+                text = not_formed_text(reason, NEEDS_REVIEW)
+                needs_review = True
+                error = reason
+                logger.info("Раздел %s отклонён: %s", section["key"], reason)
             result.sections.append(
                 SectionDraft(
                     key=section["key"],
@@ -509,6 +521,7 @@ async def generate_draft(
                     citations=citations,
                     needs_review=needs_review,
                     latency_ms=int((time.perf_counter() - started_section) * 1000),
+                    error=error,
                 )
             )
         except Exception as exc:  # noqa: BLE001
