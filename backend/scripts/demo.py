@@ -53,6 +53,19 @@ OUTPUT_DIR = BACKEND.parent / "data" / "demo" / "output"
 LOG_PATH = BACKEND.parent / "data" / "demo" / "demo_real.log"
 
 
+def use_case(case_dir: Path) -> None:
+    """Переключить прогон на другое дело.
+
+    Демо-дел два: синтетическое (data/demo) и обезличенное реальное
+    решение (data/demo/real). У них разные правила публикации, поэтому
+    это разные каталоги, а не один каталог с двумя наборами файлов.
+    """
+    global DEMO_DIR, OUTPUT_DIR, LOG_PATH
+    DEMO_DIR = case_dir
+    OUTPUT_DIR = case_dir / "output"
+    LOG_PATH = case_dir / "demo_run.log"
+
+
 def say(message: str = "", log: object = None) -> None:
     """Печать в консоль и, если задан, в файл в UTF-8.
 
@@ -509,7 +522,8 @@ async def run_demo(
         f"# ПРОЕКТ РЕШЕНИЯ\n\n"
         f"> {manifest.get('warning', 'SYNTHETIC DEMO DATA')}\n\n"
         f"Дело № {draft.case_number}\n\n---\n\n{draft.text}\n\n---\n\n"
-        f"## Проверка\n\n{report.human_summary()}\n",
+        f"## Проверка\n\n{report.human_summary()}\n"
+        + court_reference_block(DEMO_DIR),
         encoding="utf-8",
     )
     say(f"  проект:     {draft_path}", log)
@@ -607,6 +621,28 @@ async def ensure_schema_for(engine) -> None:  # noqa: ANN001
     await create_all(engine)
 
 
+def court_reference_block(case_dir: Path) -> str:
+    """Блок «как это дело решил суд» для вывода проекта.
+
+    Появляется только там, где решение известно: для обезличенного
+    реального дела разница между проектом и решением суда бывает
+    огромной — суд может присудить копейки вместо заявленных тысяч.
+    Прятать такое нельзя: на демонстрации всё равно спросят, а «проект
+    системный, а суд решил иначе» честнее любого вывода.
+    """
+    reference_path = case_dir / "court_decision_reference.txt"
+    if not reference_path.exists():
+        return ""
+    text = reference_path.read_text(encoding="utf-8").strip()
+    if not text:
+        return ""
+    return (
+        "\n\n---\n\n## Как это дело решил суд\n\n"
+        "> Приводится для сравнения с проектом. Система готовит проект, "
+        "решение принимает судья.\n\n" + text + "\n"
+    )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Демонстрация CourtDraft AI")
     parser.add_argument(
@@ -620,7 +656,13 @@ def main() -> int:
     parser.add_argument(
         "--log", default="", help="дублировать вывод в файл (UTF-8)"
     )
+    parser.add_argument(
+        "--case", default="", help="каталог дела (по умолчанию data/demo)"
+    )
     args = parser.parse_args()
+
+    if args.case:
+        use_case(Path(args.case).resolve())
 
     # Консоль Windows по умолчанию отдаёт русский текст в cp1251, и
     # символ вроде «→» или «✓» кодировать нечем: прогон падал с

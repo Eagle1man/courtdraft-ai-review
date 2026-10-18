@@ -65,7 +65,7 @@ class TestRoot:
         """Интерфейс действительно отдаётся, а не только задекларирован."""
         response = await client.get("/app/")
         assert response.status_code == 200
-        assert "CourtDraft" in response.text
+        assert "ИИ помощник судьи" in response.text
 
     async def test_api_root_reports_ui_path(self, client: AsyncClient) -> None:
         data = (await client.get("/api")).json()

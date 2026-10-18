@@ -47,6 +47,13 @@ class LLMRequest(BaseModel):
         default=False,
         description="Ожидается валидный JSON в ответе",
     )
+    reasoning: bool | None = Field(
+        default=None,
+        description=(
+            "Разрешено ли модели размышлять перед ответом. None — на "
+            "усмотрение провайдера. False — ответ без рассуждений."
+        ),
+    )
     stop: Sequence[str] | None = None
     metadata: dict[str, Any] = Field(
         default_factory=dict,

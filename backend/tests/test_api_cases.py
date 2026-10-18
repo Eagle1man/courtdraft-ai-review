@@ -255,6 +255,24 @@ class TestHealthWithDatabase:
         assert "SQLite" in by_name["Database"]["detail"]
 
     async def test_overall_status_is_ok(self, client: AsyncClient) -> None:
-        """С работающей БД статус поднимается с DEGRADED до OK."""
-        data = (await client.get("/api/health")).json()
+        """С работающей БД статус поднимается с DEGRADED до OK.
+
+        Проверка статуса целиком зависит от всех компонентов, поэтому
+        тест задаёт провайдеры заглушками. Иначе результат зависел бы
+        от .env машины разработчика: переключили провайдера на реальную
+        модель — и тест падал на том, что модель на ноутбуке не
+        запущена. Проверка БД тут ни при чём.
+        """
+        from app.config import EmbeddingProviderName, LLMProviderName, Settings
+        from app.main import create_app
+
+        settings = Settings(
+            llm_provider=LLMProviderName.MOCK,
+            embedding_provider=EmbeddingProviderName.MOCK,
+            database_url="sqlite+aiosqlite:///:memory:",
+        )
+        transport = ASGITransport(app=create_app(settings))
+        async with AsyncClient(transport=transport, base_url="http://test") as own:
+            data = (await own.get("/api/health")).json()
+
         assert data["status"] == "OK"

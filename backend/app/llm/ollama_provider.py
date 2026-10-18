@@ -18,6 +18,23 @@ import httpx
 from app.llm.base import LLMError, LLMRequest, LLMResponse, LLMUsage
 
 
+def _clean_reasoning_marks(text: str) -> str:
+    """Убрать служебные метки размышления из ответа.
+
+    Даже при выключенном режиме размышления шаблон чата оставляет
+    закрывающий тег в начале ответа: ответ начинался со строки
+    «</think>». В проект решения такая строка попадала как текст.
+
+    Удаляются только метки и блоки размышления; сам текст не
+    трогается.
+    """
+    if not text:
+        return text
+    cleaned = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
+    cleaned = cleaned.replace("</think>", "").replace("<think>", "")
+    return cleaned.strip()
+
+
 class OllamaProvider:
     """Провайдер поверх HTTP-интерфейса Ollama.
 
@@ -63,6 +80,17 @@ class OllamaProvider:
             "messages": [m.model_dump() for m in request.messages],
             "stream": False,
             "options": options,
+            # РАЗМЫШЛЕНИЕ ВЫКЛЮЧАЕТСЯ ПО УМОЛЧАНИЮ.
+            #
+            # У моделей семейства Qwen3 в Ollama включён режим размышления
+            # по умолчанию, и весь ответ уходит в отдельное поле thinking.
+            # Поле content при этом пустое: система получала пустой текст
+            # и считала, что модель не ответила.
+            #
+            # На этой машине размышление ещё и дорого: 1.7B на процессоре
+            # i3 тратит на рассуждение минуты, а в проект решения оно всё
+            # равно не попадает — следы рассуждений в тексте акта недопустимы.
+            "think": bool(request.reasoning) if request.reasoning is not None else False,
         }
         # json_mode на уровне протокола Ollama не гарантирован, поэтому
         # требование JSON дублируется инструкцией в системном сообщении.
@@ -84,6 +112,7 @@ class OllamaProvider:
             raise LLMError(f"Не удалось достучаться до Ollama ({url}): {exc}") from exc
 
         text = (data.get("message") or {}).get("content", "")
+        text = _clean_reasoning_marks(text)
 
         return LLMResponse(
             text=text,

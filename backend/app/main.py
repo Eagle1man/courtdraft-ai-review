@@ -100,10 +100,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             logger.info("MOCK-режим: реальная LLM не вызывается (это штатно для разработки)")
         yield
         await db.disconnect()
-        logger.info("CourtDraft AI остановлен")
+        logger.info("ИИ помощник судьи остановлен")
 
     app = FastAPI(
-        title="CourtDraft AI",
+        title="ИИ помощник судьи",
         version=VERSION,
         description=(
             "Локальная подготовка проекта судебного акта.\n\n"
@@ -136,7 +136,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def api_root() -> dict[str, str]:
         """Корень API: указать, где документацию и интерфейс."""
         info: dict[str, str] = {
-            "name": "CourtDraft AI",
+            "name": "ИИ помощник судьи",
             "version": VERSION,
             "docs": "/docs",
             "health": "/api/health",
@@ -155,7 +155,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if cfg.frontend_available:
             return RedirectResponse(url="/app")
         return {
-            "name": "CourtDraft AI",
+            "name": "ИИ помощник судьи",
             "version": VERSION,
             "docs": "/docs",
             "health": "/api/health",

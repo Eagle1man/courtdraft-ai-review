@@ -57,7 +57,7 @@ class Settings(BaseSettings):
     )
 
     # ── Приложение ──────────────────────────────────────────────────────
-    app_name: str = "CourtDraft AI"
+    app_name: str = "ИИ помощник судьи"
     app_env: AppEnv = AppEnv.DEVELOPMENT
     debug: bool = False
     log_level: str = "INFO"
