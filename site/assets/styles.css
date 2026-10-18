@@ -359,3 +359,45 @@ a { color: var(--accent); }
   max-width: 62em;
 }
 .demo-caveat strong { color: #8a5b00; }
+
+/* ── План развития ────────────────────────────────────────────────────
+ *
+ * Карточки плана. Сетка растягивается по ширине и переносится в одну
+ * колонку на узком экране — на телефоне читать три колонки нельзя.
+ */
+.plan-grid {
+  display: grid;
+  gap: 1.1rem;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  margin: 2rem 0 1.5rem;
+}
+
+.plan-card {
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 1.25rem 1.35rem;
+}
+
+.plan-card h3 {
+  margin: 0 0 .7rem;
+  font-size: 1.02rem;
+}
+
+.plan-card p {
+  margin: 0 0 .7rem;
+  font-size: .93rem;
+  color: var(--ink-soft);
+}
+
+.plan-card p:last-child {
+  margin-bottom: 0;
+}
+
+.plan-card strong {
+  color: var(--ink);
+}
+
+.plan-note {
+  margin-top: .5rem;
+}
