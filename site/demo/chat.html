@@ -53,8 +53,10 @@
 
   <aside class="chat-side">
     <h2>Дело</h2>
+    <select id="case-select" class="case-select" aria-label="Выбор дела"></select>
     <p class="chat-case" id="case-line">—</p>
-    <p class="chat-case muted" id="parties-line">—</p>
+    <p class="chat-case muted" id="court-line">—</p>
+    <p class="chat-case muted" id="case-party">—</p>
 
     <h2 class="mt">Можно спросить</h2>
     <ul class="chat-suggest" id="suggest"></ul>
@@ -65,8 +67,9 @@
     </ul>
 
     <p class="muted small mt">
-      Система готовит <strong>проект</strong>. Проверка и принятие
-      решения — за судьёй.
+      Дела обезличены: фамилии, названия организаций и номера дел
+      удалены. Тексты взяты из открытого корпуса судебных решений.
+      Система готовит <strong>проект</strong>: решение принимает судья.
     </p>
   </aside>
 

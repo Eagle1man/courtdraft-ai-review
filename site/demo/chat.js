@@ -1,24 +1,24 @@
-/* Диалоговое окно демонстрации.
+/* Диалоговое окно демонстрации по десяти реальным обезличенным делам.
  *
- * Ответы собираются из demo-data.json — того же прогона, из которого
- * сделан проект решения. Ни одна цифра в ответе не набирается вручную:
- * всё берётся из требований, итога, замечаний проверки и списка
- * источников, которые система вывела сама.
+ * Ответы собираются из cases.json — результата прогона правил системы
+ * по этим делам (scripts/build_real_site.py). Ни одна цифра в ответе не
+ * набирается руками: всё берётся из требований, итога, источников и
+ * замечаний проверки, которые система вывела сама.
  *
  * Правило, важное для этого продукта: на вопрос, ответа на который в
- * материалах нет, окно говорит, что не знает. Молчаливый правдоподобный
- * ответ хуже отказа, потому что судья принял бы его за установленный
- * факт.
+ * материалах нет, окно говорит, что не знает. Молчаливый
+ * правдоподобный ответ хуже отказа: судья принял бы его за
+ * установленный факт.
  */
 
 (function () {
   "use strict";
 
-  var DATA_URL = "demo-data.json";
-  var state = { data: null };
+  var DATA_URL = "cases.json";
+  var state = { cases: [], current: null };
 
   function $(id) {
-    return document.getElementById("log").ownerDocument.getElementById(id);
+    return document.getElementById(id);
   }
 
   function escapeHtml(text) {
@@ -30,15 +30,22 @@
   }
 
   function money(value) {
-    if (typeof value !== "number" || !isFinite(value)) return "—";
-    return value.toLocaleString("ru-RU").replace(/ /g, " ");
+    if (typeof value !== "number" || !isFinite(value) || value === 0) return "";
+    return value.toLocaleString("ru-RU").replace(/ /g, " ");
   }
 
   function rubles(value) {
-    return money(value) + " руб.";
+    var text = money(value);
+    return text ? text + " руб." : "";
   }
 
-  /* ── Отрисовка реплик ─────────────────────────────────────────── */
+  function case_() {
+    return state.current || {};
+  }
+
+  function rules() {
+    return case_().rules || {};
+  }
 
   function addBubble(role, html) {
     var bubble = document.createElement("div");
@@ -60,7 +67,15 @@
   }
 
   function list(items) {
-    return "<ul>" + items.map(function (item) { return "<li>" + item + "</li>"; }).join("") + "</ul>";
+    return (
+      "<ul>" +
+      items
+        .map(function (item) {
+          return "<li>" + item + "</li>";
+        })
+        .join("") +
+      "</ul>"
+    );
   }
 
   /* ── Ответы ───────────────────────────────────────────────────── */
@@ -68,104 +83,160 @@
   var answers = {
     /* «Сформируй проект решения» */
     draft: function () {
-      var sections = state.data.sections;
-      var mock = sections.filter(function (s) { return s.is_mock; }).length;
+      var text = case_().operative_text || "";
+      var sources = case_().sources || [];
+      var issues = (case_().verification || {}).issues || [];
       return (
-        "<p>Проект решения собран. Всего разделов: <strong>" + sections.length +
-        "</strong>, источников: <strong>" + state.data.sources.length + "</strong>.</p>" +
-        (mock
-          ? "<p>Часть разделов не сформирована: языковая модель на этой машине " +
-            "не подключена, вместо текста показана служебная заглушка. " +
-            "Я не буду изображать готовый текст.</p>"
-          : "") +
-        "<p>Резолютивная часть собирается правилами и от модели не зависит:</p>" +
-        "<blockquote>" + escapeHtml(sectionText("operative")) + "</blockquote>" +
-        '<p class="cite">Проект целиком — на странице ' +
-        '<a href="index.html">демонстрации</a>.</p>'
+        "<p>Резолютивная часть собрана по правилам и от модели не " +
+        "зависит: в ней суд постановляет, кому и сколько платить.</p>" +
+        "<blockquote>" +
+        escapeHtml(text) +
+        "</blockquote>" +
+        "<p>Источники сумм: " +
+        (sources.length
+          ? sources.map(escapeHtml).join(", ")
+          : "не установлены") +
+        ". Замечаний проверки: " +
+        issues.length +
+        ".</p>"
       );
     },
 
     /* «Какие требования заявлены?» */
     claims: function () {
-      var rules = state.data.rules || {};
-      var claims = rules.claims || [];
-      if (!claims.length) {
-        return "<p>Требований с суммой в материалах не нашлось. " +
-          "Судья должен проверить, все ли документы загружены.</p>";
+      var data = rules();
+      var claims = data.claims || [];
+      var others = data.other_claims || [];
+      if (!claims.length && !others.length) {
+        return (
+          "<p>По этим материалам требований с суммой не нашлось.</p>" +
+          "<p>Это тоже ответ: система говорит, что не разобрала дело, " +
+          "а не сочиняет требования. Судья видит, что документов " +
+          "недостаточно или что их надо дочитать.</p>"
+        );
       }
       var items = claims.map(function (claim) {
-        return "<strong>" + escapeHtml(rubles(claim.amount)) + "</strong> — " +
-          escapeHtml(claim.basis || "основание не определено") + " " +
-          cite(claim.source || "источник не указан");
+        return (
+          "<strong>" +
+          escapeHtml(rubles(claim.amount)) +
+          "</strong> — " +
+          escapeHtml(claim.basis || "основание не определено") +
+          " " +
+          cite(claim.source || "источник не указан")
+        );
       });
-      var other = rules.other_claims || [];
-      if (other.length) {
-        other.forEach(function (claim) {
-          items.push(escapeHtml(claim.description || "") + " " +
-            cite(claim.source || "источник не указан"));
-        });
-      }
-      var counters = rules.counter_claims || [];
-      if (counters.length) {
-        counters.forEach(function (counter) {
-          items.push("<em>встречное требование ответчика</em>: " +
-            escapeHtml(counter.basis || "") + ", исход: " +
-            escapeHtml(counter.outcome) + " " + cite(counter.source || ""));
-        });
-      }
-      return "<p>Из материалов извлечено требований: <strong>" + items.length +
-        "</strong>.</p>" + list(items);
+      others.forEach(function (claim) {
+        // Требование без суммы не начинается с «— сумма»: строка с
+        // висящим тире ничего не говорит читателю.
+        var title = claim.description || claim.basis || "";
+        if (!title) {
+          return;
+        }
+        items.push(
+          (claim.description ? "" : "<strong>без суммы</strong> — ") +
+            escapeHtml(title) +
+            " " +
+            cite(claim.basis && claim.description ? claim.basis : "")
+        );
+      });
+      (data.counter_claims || []).forEach(function (counter) {
+        items.push(
+          "<em>встречное требование ответчика</em>: " +
+            escapeHtml(counter.basis || "") +
+            ", исход: " +
+            escapeHtml(counter.outcome) +
+            " " +
+            cite(counter.source || "")
+        );
+      });
+      return (
+        "<p>Из материалов извлечено требований: <strong>" +
+        items.length +
+        "</strong>.</p>" +
+        list(items)
+      );
     },
 
     /* «Откуда сумма?» */
     total: function () {
-      var rules = state.data.rules || {};
-      var claims = rules.claims || [];
-      var fee = rules.fee_paid;
-      var total = rules.total_with_fee;
-
+      var data = rules();
+      var claims = data.claims || [];
+      var fee = data.fee_paid;
+      var total = data.total_with_fee;
+      if (!total) {
+        return (
+          "<p>Итог по делу не посчитан: суммы требований в материалах " +
+          "не установлены.</p>"
+        );
+      }
       var parts = claims.map(function (claim) {
-        return escapeHtml(rubles(claim.amount)) + " — " +
-          escapeHtml(claim.basis || "") + " " + cite(claim.source || "");
+        return (
+          escapeHtml(rubles(claim.amount)) +
+          " — " +
+          escapeHtml(claim.basis || "") +
+          " " +
+          cite(claim.source || "")
+        );
       });
       if (fee) {
-        parts.push(escapeHtml(rubles(fee)) + " — государственная пошлина " +
-          cite("ст. 98 ГПК РФ"));
+        parts.push(
+          escapeHtml(rubles(fee)) + " — государственная пошлина " + cite("ст. 98 ГПК РФ")
+        );
       }
-      var formula = parts.join("<br>＋<br>");
-
-      return "<p>Итог <strong>" + escapeHtml(rubles(total)) +
+      return (
+        "<p>Итог <strong>" +
+        escapeHtml(rubles(total)) +
         "</strong> сложен из сумм, которые есть в материалах дела:</p>" +
-        "<p>" + formula + "</p>" +
-        "<p>Итог сам по себе в материалах не встречается — его считает " +
-        "система, и он равен сумме перечисленного. Поэтому проверка его " +
-        "и не помечает как выдуманный: это арифметика, а не новая сумма.</p>";
+        "<p>" +
+        parts.join("<br>＋<br>") +
+        "</p>" +
+        "<p>Сам итог в материалах не встречается — его считает система. " +
+        "Поэтому проверка его и не помечает как выдуманный: это " +
+        "арифметика, а не новая сумма.</p>"
+      );
     },
 
     /* «Что требует проверки?» */
     review: function () {
-      var verification = state.data.verification || {};
+      var verification = case_().verification || {};
       var issues = verification.issues || [];
-      if (!issues.length) {
-        return "<p>Замечаний проверки нет. Статус: <strong>" +
-          escapeHtml(verification.status) + "</strong>.</p>";
+      var gaps = case_().gaps || [];
+      if (!issues.length && !gaps.length) {
+        return (
+          "<p>Замечаний нет. Статус: <strong>" +
+          escapeHtml(verification.status || "") +
+          "</strong>.</p>"
+        );
       }
       var items = issues.map(function (issue) {
-        return '<strong class="sev sev-' + escapeHtml(issue.severity) + '">' +
-          escapeHtml(issue.severity) + "</strong> " +
+        return (
+          '<strong class="sev sev-' +
+          escapeHtml(issue.severity) +
+          '">' +
+          escapeHtml(issue.severity) +
+          "</strong> " +
           escapeHtml(issue.reason) +
-          (issue.section ? " <em>(" + escapeHtml(issue.section) + ")</em>" : "");
+          (issue.section ? " <em>(" + escapeHtml(issue.section) + ")</em>" : "")
+        );
       });
-      return "<p>Проверка проекта: <strong>" +
-        escapeHtml(verification.status) + "</strong>, замечаний: " +
-        issues.length + ", утверждений без источника: " +
-        (verification.unsupported_claims || 0) + ".</p>" + list(items);
+      gaps.forEach(function (gap) {
+        items.push("<em>Пропуск:</em> " + escapeHtml(gap));
+      });
+      return (
+        "<p>Проверка проекта: <strong>" +
+        escapeHtml(verification.status || "") +
+        "</strong>, замечаний: " +
+        (issues.length + gaps.length) +
+        ", утверждений без источника: " +
+        (verification.unsupported_claims || 0) +
+        ".</p>" +
+        list(items)
+      );
     },
 
     /* «Кто стороны?» */
     parties: function () {
-      var rules = state.data.rules || {};
-      var parties = rules.parties || {};
+      var parties = rules().parties || {};
       var items = [];
       if (parties.plaintiff) {
         items.push("<strong>истец</strong>: " + escapeHtml(parties.plaintiff));
@@ -174,73 +245,79 @@
         items.push("<strong>ответчик</strong>: " + escapeHtml(parties.defendant));
       }
       if (!items.length) {
-        (state.data.participants || []).forEach(function (line) {
-          items.push(escapeHtml(line));
-        });
+        return (
+          "<p>Стороны в материалах не определены: в обезличенном тексте " +
+          "имена заменены, и правила не нашли обозначений ролей.</p>"
+        );
       }
-      if (!items.length) {
-        return "<p>Стороны в материалах не определены.</p>";
-      }
-      return "<p>Стороны по материалам дела:</p>" + list(items) +
+      return (
+        "<p>Стороны по материалам дела:</p>" +
+        list(items) +
         '<p class="cite">Названия взяты как есть, в том падеже, в ' +
-        "котором они стоят рядом со словом «Ответчик:».</p>";
+        "котором они стоят в материалах.</p>"
+      );
     },
 
     /* «Какие документы в деле?» */
     documents: function () {
-      var docs = state.data.documents || [];
-      if (!docs.length) return "<p>Материалы дела не загружены.</p>";
+      var docs = case_().documents_list || [];
+      if (!docs.length) {
+        return "<p>Материалы дела не загружены.</p>";
+      }
       var items = docs.map(function (doc) {
-        var facts = doc.facts === "0"
-          ? " — фактов не извлечено"
-          : " — фактов: " + doc.facts;
-        return "<strong>" + escapeHtml(doc.name) + "</strong>" + escapeHtml(facts) +
-          (doc.title ? '<br><span class="cite">' +
-            escapeHtml(doc.title) + "</span>" : "");
+        return (
+          "<strong>" +
+          escapeHtml(doc.name || doc.filename || "") +
+          "</strong>" +
+          escapeHtml(doc.facts === "0" ? " — фактов не извлечено" : "")
+        );
       });
-      var empty = docs.filter(function (doc) { return doc.facts === "0"; }).length;
-      var tail = empty
-        ? "<p>Из " + empty + " документов фактов не извлечено. Это видно " +
-          "намеренно: молча пропущенный документ выглядит так, будто его " +
-          "не было в деле.</p>"
-        : "";
-      return "<p>В деле документов: <strong>" + docs.length + "</strong>.</p>" +
-        list(items) + tail;
+      return (
+        "<p>В деле документов: <strong>" +
+        docs.length +
+        "</strong>.</p>" +
+        list(items)
+      );
     },
 
-    /* «Какое решение?» */
-    operative: function () {
-      return "<p>Резолютивная часть решения:</p><blockquote>" +
-        escapeHtml(sectionText("operative")) + "</blockquote>";
+    /* «Как решил суд?» */
+    court: function () {
+      var text = case_().court_decision_reference || "";
+      if (!text) {
+        return "<p>Решение суда по этому делу не найдено.</p>";
+      }
+      return (
+        "<p>Вот что суд постановил по этому делу. Система его не " +
+        "читала: резолютивная часть суда не подаётся в материалы, " +
+        "иначе демо показывало бы пересказ чужого решения.</p>" +
+        "<blockquote>" +
+        escapeHtml(text) +
+        "</blockquote>" +
+        '<p class="cite">Сравните с проектом системы: разница в суммах ' +
+        "и том, что суд счёл нужным, — это и есть работа судьи.</p>"
+      );
     }
   };
-
-  function sectionText(key) {
-    var sections = state.data.sections || [];
-    for (var i = 0; i < sections.length; i++) {
-      if (sections[i].key === key) return sections[i].text;
-    }
-    return "";
-  }
 
   /* ── Распознавание вопроса ────────────────────────────────────── */
 
   /*
    * Признаки подбираются по смыслу вопроса, а не по точному совпадению.
-   * Задача окна — отвечать на вопросы человека, а не повторять ему
-   * эталонную фразу, которой нет в коде.
+   * Задача окна — отвечать человеку, а не повторять ему эталонную
+   * фразу, которой нет в коде.
    */
   function intent(question) {
     var q = question.toLowerCase();
-
-    if (/итог|всего|назад|сумм|откуда|почему.*(\d|руб)/.test(q) &&
-        !/требован/.test(q)) {
+    if (/суд|как решил|реальн|оригинал/.test(q)) {
+      return answers.court;
+    }
+    if (/итог|всего|назад|сумм|откуда|почему/.test(q) && !/требован/.test(q)) {
       return answers.total;
     }
     if (/требован|что заяв|претенз|иск про|взыскива/.test(q)) {
       return answers.claims;
     }
-    if (/провер|замечани|ошиб|сомнени|надёж|уверен/.test(q)) {
+    if (/провер|замечани|ошиб|сомнени|надёж|уверен|упущено/.test(q)) {
       return answers.review;
     }
     if (/сторон|истец|ответчик|кто участник/.test(q)) {
@@ -249,58 +326,66 @@
     if (/документ|материал|приложен|что в деле|файл/.test(q)) {
       return answers.documents;
     }
-    if (/резолютив|решил|предмет|постановил|взыскать в/.test(q)) {
-      return answers.operative;
-    }
-    if (/проект|сформируй|сделай|подготовь|решение|акт/.test(q)) {
+    if (/резолютив|решил|предмет|постановил|проект/.test(q)) {
       return answers.draft;
     }
     return null;
   }
 
-  function fallback(question) {
-    return "<p>На этот вопрос в материалах дела ответа нет.</p>" +
+  function fallback() {
+    return (
+      "<p>На этот вопрос в материалах дела ответа нет.</p>" +
       "<p>Я не буду догадываться: в этом продукте выдуманное " +
       "утверждение опаснее отсутствующего. В материалах есть " +
-      "требования, стороны, документы и замечания проверки — " +
-      "спросите о них.</p>";
+      "требования, стороны, документы, замечания проверки и решение " +
+      "суда — спросите о них.</p>"
+    );
   }
 
-  /* ── Запуск ───────────────────────────────────────────────────── */
+  /* ── Отрисовка дела ───────────────────────────────────────────── */
 
-  var SUGGESTIONS = [
-    "Сформируй проект решения",
-    "Какие требования заявлены?",
-    "Откуда взялась сумма 155 100 рублей?",
-    "Что требует проверки специалистом?",
-    "Кто стороны по делу?",
-    "Какие документы в деле?",
-    "Сколько стоит квартира в центре Самары?"
-  ];
+  function suggestions() {
+    var total = rubles(rules().total_with_fee);
+    var out = ["Сформируй проект решения", "Какие требования заявлены?"];
+    if (total) {
+      out.push("Откуда взялась сумма " + total + "?");
+    }
+    out.push("Что требует проверки специалистом?");
+    out.push("Кто стороны по делу?");
+    out.push("Какие документы в деле?");
+    out.push("Как решил суд это дело?");
+    out.push("Сколько стоит квартира в центре Самары?");
+    return out;
+  }
 
-  function start(data) {
-    state.data = data;
-
-    $("mode").textContent = "режим: " + data.mode;
+  function renderCase() {
+    var data = case_();
+    var parties = rules().parties || {};
     $("case-line").textContent =
-      "Дело № " + data.case_number + (data.court_name ? " · " + data.court_name : "");
-
-    var parties = data.rules && data.rules.parties
-      ? data.rules.parties
-      : {};
-    $("parties-line").textContent = [
+      "Дело № " + (data.case_number || "") +
+      (data.category ? " · " + data.category : "");
+    $("court-line").textContent = data.court || "";
+    $("case-party").textContent = [
       parties.plaintiff ? "истец: " + parties.plaintiff : "",
       parties.defendant ? "ответчик: " + parties.defendant : ""
-    ].filter(Boolean).join(" · ");
+    ]
+      .filter(Boolean)
+      .join(" · ");
+    $("doc-list").innerHTML = (data.documents_list || [])
+      .map(function (doc) {
+        return "<li>" + escapeHtml(doc.filename || "") + "</li>";
+      })
+      .join("") || '<li class="muted">нет</li>';
 
-    $("doc-list").innerHTML = (data.documents || []).map(function (doc) {
-      return "<li>" + escapeHtml(doc.name) + "</li>";
-    }).join("") || '<li class="muted">нет</li>';
-
-    $("suggest").innerHTML = SUGGESTIONS.map(function (text) {
-      return '<li><button type="button" class="chat-chip">' +
-        escapeHtml(text) + "</button></li>";
-    }).join("");
+    $("suggest").innerHTML = suggestions()
+      .map(function (text) {
+        return (
+          '<li><button type="button" class="chat-chip">' +
+          escapeHtml(text) +
+          "</button></li>"
+        );
+      })
+      .join("");
 
     Array.prototype.forEach.call(
       document.querySelectorAll(".chat-chip"),
@@ -311,39 +396,78 @@
         });
       }
     );
+  }
 
-    say(
-      "<p>Спросите меня о деле — например, какие требования заявлены, " +
-      "откуда взялась сумма или что требует проверки.</p>" +
+  function greeting() {
+    var data = case_();
+    return (
+      "<p>Дело <strong>" +
+      escapeHtml(data.case_number || "") +
+      "</strong>" +
+      (data.category ? ", " + escapeHtml(data.category) : "") +
+      ". Спросите о требованиях, суммах, сторонах или о том, как это " +
+      "дело решил суд.</p>" +
       "<p>Отвечаю по материалам дела. Где данных нет, говорю об этом " +
       "прямо: придумывать нельзя.</p>"
     );
+  }
 
+  function selectCase(slug) {
+    state.current = state.cases.filter(function (item) {
+      return item.slug === slug;
+    })[0] || state.cases[0];
+    $("case-select").value = state.current.slug;
+    renderCase();
+    $("log").innerHTML = "";
+    say(greeting());
     $("ask").focus();
   }
 
-  /*
-   * Обработчик вопроса подключается сразу, а не после загрузки данных.
-   * Иначе вопрос, заданный в первую секунду после открытия страницы,
-   * исчезал бы молча: форма была ещё не готова, и реплика не
-   * отправлялась.
-   */
+  function start(payload) {
+    state.cases = payload.cases || [];
+    if (!state.cases.length) {
+      say("<p>Дела не загрузились.</p>");
+      return;
+    }
+
+    $("mode").textContent = "дел: " + state.cases.length;
+    $("case-select").innerHTML = state.cases
+      .map(function (item, index) {
+        return (
+          '<option value="' +
+          escapeHtml(item.slug) +
+          '">Дело ' +
+          (index + 1) +
+          " · " +
+          escapeHtml(item.category || item.case_number) +
+          "</option>"
+        );
+      })
+      .join("");
+
+    $("case-select").addEventListener("change", function () {
+      selectCase($("case-select").value);
+    });
+
+    selectCase(state.cases[0].slug);
+  }
+
   function attachForm() {
     $("form").addEventListener("submit", function (event) {
       event.preventDefault();
-      if (!state.data) {
-        say("<p>Данные дела ещё загружаются. Подождите секунду и спросите " +
-          "снова.</p>");
-        return;
-      }
       var input = $("ask");
       var question = input.value.trim();
       if (!question) return;
+
+      if (!state.current) {
+        say("<p>Дело ещё загружается. Подождите секунду.</p>");
+        return;
+      }
       input.value = "";
 
       addBubble("user", escapeHtml(question));
       var handler = intent(question);
-      say(handler ? handler() : fallback(question));
+      say(handler ? handler() : fallback());
     });
   }
 
@@ -355,8 +479,11 @@
     .then(start)
     .catch(function (error) {
       $("mode").textContent = "демо недоступно";
-      say("<p>Не удалось загрузить данные демонстрации: " +
-        escapeHtml(error.message) + "</p>");
+      say(
+        "<p>Не удалось загрузить данные демонстрации: " +
+          escapeHtml(error.message) +
+          "</p>"
+      );
     });
 
   attachForm();

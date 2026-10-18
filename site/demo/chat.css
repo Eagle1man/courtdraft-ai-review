@@ -198,3 +198,16 @@
     max-width: 96%;
   }
 }
+
+/* Выбор дела в демонстрации по десяти реальным делам. */
+.case-select {
+  width: 100%;
+  font: inherit;
+  font-size: 13.5px;
+  padding: 8px 10px;
+  margin-bottom: 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: #fff;
+  color: var(--ink);
+}
