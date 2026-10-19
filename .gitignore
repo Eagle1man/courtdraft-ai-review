@@ -102,3 +102,6 @@ data/lora/
 # и сам корпус весом в гигабайты. На машине остаётся, в репозиторий не
 # попадает.
 data/corpus_index/
+data/corpus_index_full/
+data/index_smoke/
+data/index_smoke2/

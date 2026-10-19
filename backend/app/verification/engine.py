@@ -27,6 +27,7 @@ from app.agents.evidence_pack import EvidencePack
 from app.config import Settings
 from app.drafting.operative import DEFAULT_LEGAL_BASIS
 from app.drafting.requirements import extract_requirements
+from app.verification.jurisdiction import check_jurisdiction
 from app.verification.laws import LawRegistry, extract_fee, fee_matches, state_fee
 from app.verification.persons import check_section
 
@@ -45,6 +46,7 @@ class IssueType(StrEnum):
     PRACTICE_NOT_FOUND = "PRACTICE_NOT_FOUND"
     CONTRADICTION = "CONTRADICTION"
     INCOMPLETE = "INCOMPLETE"
+    JURISDICTION_MISMATCH = "JURISDICTION_MISMATCH"
 
 
 class Severity(StrEnum):
@@ -296,6 +298,21 @@ def verify_draft(
     claim_total = sum(
         float(claim.amount or 0) for claim in money_claims if claim.amount is not None
     )
+
+    # Родовая подсудность сверяется с судом из материалов: расхождение
+    # между ценой иска и инстанцией — то, что судья должен увидеть до
+    # чтения проекта, а не после.
+    for jur_finding in check_jurisdiction(
+        [item.text for item in pack.items], claim_total
+    ):
+        report.issues.append(
+            Issue(
+                type=IssueType.JURISDICTION_MISMATCH,
+                severity=Severity.HIGH,
+                text="",
+                reason=jur_finding.reason,
+            )
+        )
 
     for section in draft.sections:
         text = section.text

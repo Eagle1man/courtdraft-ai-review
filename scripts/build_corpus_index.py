@@ -281,44 +281,73 @@ async def embed_and_store(
     if done:
         print(f"продолжаю: ранее записано решений {len(done)}")
 
+    # Один упавший эмбеддинг не должен убивать многочасовой прогон:
+    # три запуска подряд гибли на транзиентных сбоях, и всё, что
+    # уже успело записаться до сбоя, принадлежало именно им.
     points: list[models.PointStruct] = []
-    chunks_total = 0
+    pending_sources: list[str] = []
+    failed: list[str] = []
     for number, decision in enumerate(decisions, start=1):
         if decision["source"] in done:
             continue
-        for chunk in chunk_text(
-            decision["operative"], document_id=decision["source"], settings=cfg
-        ):
-            vector = await embed_with_retry(provider, chunk.text)
-            # Qdrant требует UUID. Идентификатор детерминированный:
-            # пересборка индекса перезаписывает те же точки, а не
-            # добавляет дубликаты.
-            point_id = str(uuid.uuid5(uuid.NAMESPACE_URL, chunk.chunk_id))
-            points.append(
-                models.PointStruct(
-                    id=point_id,
-                    vector=vector,
-                    payload={
-                        "source": decision["source"],
-                        "text": chunk.text,
-                        "outcome": decision["outcome"],
-                        "subject": decision["subject"],
-                        "court": decision["court"],
-                    },
+        try:
+            for chunk in chunk_text(
+                decision["operative"], document_id=decision["source"], settings=cfg
+            ):
+                vector = await embed_with_retry(provider, chunk.text)
+                # Qdrant требует UUID. Идентификатор детерминированный:
+                # пересборка индекса перезаписывает те же точки, а не
+                # добавляет дубликаты.
+                point_id = str(uuid.uuid5(uuid.NAMESPACE_URL, chunk.chunk_id))
+                points.append(
+                    models.PointStruct(
+                        id=point_id,
+                        vector=vector,
+                        payload={
+                            "source": decision["source"],
+                            "text": chunk.text,
+                            "outcome": decision["outcome"],
+                            "subject": decision["subject"],
+                            "court": decision["court"],
+                        },
+                    )
                 )
+        except Exception as error:  # noqa: BLE001 - пропуск вместо падения
+            failed.append(decision["source"])
+            print(
+                f"  пропуск {decision['source']}: "
+                f"{error.__class__.__name__}: {error}"
             )
-            chunks_total += 1
+            continue
+        pending_sources.append(decision["source"])
 
-        if number % 25 == 0:
+        if number % 25 == 0 and points:
             client.upsert(collection_name=COLLECTION, points=points)
-            print(f"  {number}/{len(decisions)} решений, кусков {chunks_total}")
+            done.update(pending_sources)
+            save_progress(index_path, done)
+            print(f"  {number}/{len(decisions)} решений, пропущено {len(failed)}")
             points = []
+            pending_sources = []
 
     if points:
         client.upsert(collection_name=COLLECTION, points=points)
+        done.update(pending_sources)
+        save_progress(index_path, done)
+
+    if failed:
+        print(f"не проиндексировано решений: {len(failed)}")
+        (index_path / "failed_sources.txt").write_text(
+            "\n".join(failed), encoding="utf-8"
+        )
 
     client.close()
-    return len(decisions), chunks_total
+    # Число кусков берем из хранилища: при докатке счетчик по текущему
+    # прогону не учитывает куски, записанные до падения.
+    client = QdrantClient(path=str(index_path / "qdrant"))
+    chunks = client.count(COLLECTION, exact=True).count
+    client.close()
+    decisions_count = len(done) if done else len(decisions)
+    return decisions_count, chunks
 
 
 async def search(index_path: Path, query: str, limit: int) -> int:
