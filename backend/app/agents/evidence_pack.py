@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import json
 import re
-from collections import defaultdict
+from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -238,6 +238,14 @@ def extract_dates(text: str) -> list[str]:
     return found
 
 
+#: Сколько фрагментов берётся из одного документа в одну категорию.
+#:
+#: Раньше лимит стоял на категорию целиком, и документы в конце списка
+#: не давали ничего: договор, платёжка и заключение эксперта оказывались
+#: вне пакета, хотя их тип распознавался верно.
+PER_DOCUMENT_LIMIT = 6
+
+
 def _classify(sentence: str, doc_type: str) -> str:
     """Определить категорию факта по содержанию и типу документа."""
     s = sentence.lower()
@@ -343,8 +351,22 @@ def build_evidence_pack(
         "established_facts", "legal_position", "disputed_facts",
     ]
 
+    # Лимит раньше стоял на категорию, и документы, оказавшиеся в конце
+    # списка, не давали ни одного факта: договор, платёжка и заключение
+    # эксперта в споре о долге оказывались не учтены, хотя тип их
+    # распознавался верно. В деле из демонстрации из шести документов
+    # факты шли только из иска, протокола и отзыва.
+    #
+    # Лимит перенесён на документ: сколько фрагментов берётся из
+    # одного файла. Договор в таком деле — доказательство, и молчать о
+    # нём хуже, чем процитировать лишнее.
     for category_name in order:
-        for document, sentence in grouped.get(category_name, [])[:25]:
+        taken: Counter[str] = Counter()
+        for document, sentence in grouped.get(category_name, []):
+            name = document.filename
+            if taken[name] >= PER_DOCUMENT_LIMIT:
+                continue
+            taken[name] += 1
             pack.items.append(
                 EvidenceItem(
                     category=category_name,
