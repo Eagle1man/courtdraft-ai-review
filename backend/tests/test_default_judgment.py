@@ -34,24 +34,35 @@ def claim() -> MoneyClaim:
 class TestDefaultJudgmentItems:
     """Пункты, которые обязаны быть в заочном решении."""
 
-    def test_procedure_item_first(self) -> None:
-        """Порядок рассмотрения идёт первым в резолюции."""
+    def test_legal_basis_item_first(self) -> None:
+        """Вводная формула открывает резолютивную часть.
+
+        Без неё резолюция начиналась сразу с «Удовлетворить…» и не
+        читалась как часть решения.
+        """
         result = build_operative([claim()], fee_paid=5100,
                                  procedure=Procedure.DEFAULT)
-        assert result.items[0].startswith("Рассмотреть дело")
-        assert "заочного производства" in result.items[0]
+        assert result.items[0].startswith("Руководствуясь")
+        assert "ст. 198" in result.items[0]
+
+    def test_procedure_item_second(self) -> None:
+        """Порядок рассмотрения идёт после вводной формулы."""
+        result = build_operative([claim()], fee_paid=5100,
+                                 procedure=Procedure.DEFAULT)
+        assert result.items[1].startswith("Рассмотреть дело")
+        assert "заочного производства" in result.items[1]
 
     def test_procedure_cites_article_233(self) -> None:
         """Статья 233 ГПК РФ — основание заочного производства."""
         result = build_operative([claim()], fee_paid=5100,
                                  procedure=Procedure.DEFAULT)
-        assert "ст. 233 ГПК РФ" in result.items[0]
+        assert "ст. 233 ГПК РФ" in result.items[1]
 
     def test_non_appearance_reason_stated(self) -> None:
         """Суд обязан признать причину неявки неуважительной."""
         result = build_operative([claim()], fee_paid=5100,
                                  procedure=Procedure.DEFAULT)
-        assert "неуважительн" in result.items[0]
+        assert "неуважительн" in result.items[1]
 
     def test_cancellation_right_stated(self) -> None:
         """Право ответчика на отмену заявлением за 7 дней."""
@@ -114,8 +125,8 @@ class TestAbsentPlaintiff:
     def test_absent_plaintiff_item(self) -> None:
         result = build_operative([claim()], fee_paid=5100,
                                  procedure=Procedure.ABSENT_PLAINTIFF)
-        assert result.items[0].startswith("Рассмотреть дело в отсутствие")
-        assert "истц" in result.items[0]
+        assert result.items[1].startswith("Рассмотреть дело в отсутствие")
+        assert "истц" in result.items[1]
 
     def test_absent_plaintiff_has_no_cancellation(self) -> None:
         """У неявки истца нет семидневного срока отмены."""

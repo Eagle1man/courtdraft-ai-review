@@ -20,10 +20,14 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from enum import StrEnum
+from pathlib import Path
 
 from app.agents.draft_agent import NEEDS_REVIEW, DraftResult
 from app.agents.evidence_pack import EvidencePack
+from app.config import Settings
 from app.drafting.operative import DEFAULT_LEGAL_BASIS
+from app.drafting.requirements import extract_requirements
+from app.verification.laws import LawRegistry, extract_fee, fee_matches, state_fee
 from app.verification.persons import check_section
 
 
@@ -248,7 +252,9 @@ SYSTEM_LAWS: frozenset[tuple[str, str]] = frozenset(
 )
 
 
-def verify_draft(draft: DraftResult, pack: EvidencePack) -> VerificationReport:
+def verify_draft(
+    draft: DraftResult, pack: EvidencePack, settings: Settings | None = None
+) -> VerificationReport:
     """Проверить проект на соответствие материалам дела."""
     report = VerificationReport(sections_checked=len(draft.sections))
 
@@ -276,6 +282,20 @@ def verify_draft(draft: DraftResult, pack: EvidencePack) -> VerificationReport:
     # требовать подтверждения материалами нельзя: система ругалась сама
     # на собственную резолютивную часть.
     system_laws = SYSTEM_LAWS | _laws_in(DEFAULT_LEGAL_BASIS)
+
+    # База законодательства. Норма подтверждается ею, а не материалами
+    # дела: суд ссылается на ст. 309 ГК, которой в иске нет, и требовать
+    # её подтверждения материалами нельзя — так каждая верная ссылка
+    # помечалась неподтверждённой.
+    registry = LawRegistry.load(settings.laws_dir if settings else Path("data/laws"))
+
+    # Цена иска — сумма денежных требований. Нужна для расчёта
+    # госпошлины: по НК РФ пошлина считается от неё, а не берётся из
+    # текста иска как есть.
+    money_claims, _others, _unrecognised = extract_requirements(pack)
+    claim_total = sum(
+        float(claim.amount or 0) for claim in money_claims if claim.amount is not None
+    )
 
     for section in draft.sections:
         text = section.text
@@ -391,15 +411,42 @@ def verify_draft(draft: DraftResult, pack: EvidencePack) -> VerificationReport:
                 # берёт из материалов дела. Подтверждать её материалами
                 # бессмысленно: в иске судью ст. 198 ГПК не пишут.
                 continue
-            if (article, code) not in material_laws:
+            if code and registry.contains(code, article):
+                # Статья существует в кодексе — ссылка законна, даже если
+                # в материалах дела о ней не сказано. Суд применяет
+                # норму, а не цитирует иск.
+                continue
+            if (article, code) in material_laws:
+                continue
+            report.issues.append(
+                Issue(
+                    type=IssueType.LAW_NOT_FOUND,
+                    severity=Severity.HIGH,
+                    text=text[:200],
+                    reason=(
+                        f"ссылка на ст. {article} {code} не подтверждена: "
+                        f"{registry.missing(code, article) or 'нет в материалах дела'}"
+                    ),
+                    section=section.name,
+                )
+            )
+
+        # ── 4b. Госпошлина против расчётной ──────────────────────
+        # Пошлину система берёт из материалов дела, а она там может быть
+        # указана неверно. По НК РФ (ст. 333.19) размер пошлины считается
+        # от цены иска, и расхождение — повод показать судье оба числа.
+        if "резолютив" in section.name.lower():
+            stated = extract_fee(text)
+            if stated is not None and not fee_matches(claim_total, stated):
                 report.issues.append(
                     Issue(
-                        type=IssueType.LAW_NOT_FOUND,
-                        severity=Severity.HIGH,
+                        type=IssueType.UNSUPPORTED_CLAIM,
+                        severity=Severity.MEDIUM,
                         text=text[:200],
                         reason=(
-                            f"ссылка на ст. {article} {code} не подтверждена "
-                            "материалами дела"
+                            f"госпошлина {stated:.2f} руб. не совпадает с "
+                            f"расчётной по цене иска {claim_total:.2f} руб.: "
+                            f"{state_fee(claim_total):.2f} руб. (НК РФ, ст. 333.19)"
                         ),
                         section=section.name,
                     )
