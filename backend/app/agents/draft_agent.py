@@ -36,7 +36,7 @@ NO_LAW_FOUND = "Норма права не найдена. Требуется п
 
 # Разделы, которые собираются по правилам, а не генерируются моделью.
 # Ключи совпадают с ключами шаблона data/templates/civil_judgment.json.
-RULES_BUILT_SECTIONS = frozenset({"operative"})
+RULES_BUILT_SECTIONS = frozenset({"operative", "objections"})
 
 SYSTEM_PROMPT = """Ты — помощник судьи. Пишешь ТОЛЬКО текст одного раздела решения суда.
 
@@ -391,6 +391,56 @@ def _build_operative_section(section: dict[str, Any], pack: EvidencePack) -> Sec
     )
 
 
+def _build_objections_section(
+    section: dict[str, Any], pack: EvidencePack
+) -> SectionDraft:
+    """Собрать «Доводы ответчика» по правилам, без участия модели.
+
+    Позиция ответчика — то, что рецензент жаловал разбором п. 75:
+    модель на 1.5B пересказывала возражения с искажениями, и довод,
+    который ответчик не заявлял, попадал в проект решения. Здесь
+    возражения цитируются дословно и по одному абзацу с указанием
+    документа. Оценки доводов в разделе нет и быть не должно:
+    оценка — работа суда, а не подготовительной машины.
+    """
+    objections = pack.by_category("objections")
+    if not objections:
+        # Молчаливый пропуск раздела хуже честной отметки: рецензент
+        # (п. 45) ловил именно случаи, когда отсутствие блока выглядело
+        # как «у ответчика возражений не было», хотя он их заявлял.
+        return SectionDraft(
+            key=section["key"],
+            name=section["name"],
+            text=(
+                "Возражения ответчика в материалах дела не обнаружены. "
+                "Если отзыв ответчика был, требуется его загрузка: "
+                f"{NEEDS_REVIEW}"
+            ),
+            needs_review=True,
+        )
+
+    paragraphs: list[str] = []
+    citations: list[str] = []
+    for item in objections:
+        paragraphs.append(f"{item.source_document}: «{item.text}»")
+        if item.source_document and item.source_document not in citations:
+            citations.append(item.source_document)
+
+    text = "\n\n".join(paragraphs)
+    text += (
+        "\n\nДоводы приведены дословно из материалов дела. Оценка доводов "
+        "судом не производилась."
+    )
+    return SectionDraft(
+        key=section["key"],
+        name=section["name"],
+        text=text,
+        # Цитаты собраны правилами из материалов дела, а не заглушкой.
+        is_mock=False,
+        citations=citations,
+    )
+
+
 def _drop_heading_repeats(text: str, name: str) -> str:
     """Убрать повторы названия раздела.
 
@@ -470,9 +520,12 @@ async def generate_draft(
     started = time.perf_counter()
 
     for section in sections_to_do:
-        # Резолютивная часть — правилами, не моделью.
+        # Резолютивная и «Доводы ответчика» — правилами, не моделью.
         if section["key"] in RULES_BUILT_SECTIONS:
-            result.sections.append(_build_operative_section(section, pack))
+            if section["key"] == "operative":
+                result.sections.append(_build_operative_section(section, pack))
+            else:
+                result.sections.append(_build_objections_section(section, pack))
             continue
 
         request_text, citations = build_section_prompt(section, pack)

@@ -31,6 +31,14 @@
       "evidence_categories": ["claims", "objections", "evidence"]
     },
     {
+      "key": "objections",
+      "name": "Доводы ответчика",
+      "purpose": "возражения ответчика дословно из материалов дела, с указанием документа; без оценки — оценивает доводы только суд",
+      "required_fields": ["objections"],
+      "prompt_hint": "Не используется: раздел собирается правилами.",
+      "evidence_categories": ["objections"]
+    },
+    {
       "key": "established",
       "name": "УСТАНОВИЛ",
       "purpose": "выводы суда по требованиям с оценкой доказательств и ссылкой на нормы права",
