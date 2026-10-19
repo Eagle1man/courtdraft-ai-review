@@ -201,3 +201,51 @@ class TestFeeCheck:
         assert extract_fee("пошлину в размере 5 100 руб.") == 5100
         assert extract_fee("пошлина 4 700 руб. 00 коп.") == 4700
         assert extract_fee("без пошлины") is None
+
+    def _dated_pack(self, date_str: str, fee_text: str):
+        pack = make_pack(
+            "Взыскать задолженность по договору в размере 150 000 руб. 00 коп."
+        )
+        pack.dates = [date_str] if date_str else []
+        draft = self._draft(fee_text)
+        return draft, pack
+
+    def test_archive_date_uses_old_tariff(self) -> None:
+        # Материалы датируют дело 2020 годом: расчётная пошлина 4 200
+        # по прежней редакции. Указано 5 500 (новый тариф) — расхождение.
+        draft, pack = self._dated_pack(
+            "5 марта 2020 года",
+            "Взыскать с ответчика государственную пошлину "
+            "в размере 5 500 руб. (ст. 98 ГПК РФ).",
+        )
+        report = verify_draft(draft, pack, settings=settings())
+        fee_issues = [
+            i for i in report.issues if "расчётной" in i.reason and "2020" in i.reason
+        ]
+        assert fee_issues
+
+    def test_archive_date_old_fee_not_flagged(self) -> None:
+        # Дело 2020 года, пошлина 4 200 — верная по прежней редакции.
+        draft, pack = self._dated_pack(
+            "5 марта 2020 года",
+            "Взыскать с ответчика государственную пошлину "
+            "в размере 4 200 руб. (ст. 98 ГПК РФ).",
+        )
+        report = verify_draft(draft, pack, settings=settings())
+        fee_issues = [
+            i for i in report.issues
+            if "расчётной" in i.reason and "пошлин" in i.reason
+        ]
+        assert not fee_issues
+
+    def test_no_date_current_tariff_still_applies(self) -> None:
+        # Даты в материалах нет — считаем по действующей редакции:
+        # при цене иска 150 000 расчётные 5 500, а в проекте 6 500.
+        draft, pack = self._dated_pack(
+            "",
+            "Взыскать с ответчика государственную пошлину "
+            "в размере 6 500 руб. (ст. 98 ГПК РФ).",
+        )
+        report = verify_draft(draft, pack, settings=settings())
+        fee_issues = [i for i in report.issues if "расчётной" in i.reason]
+        assert fee_issues

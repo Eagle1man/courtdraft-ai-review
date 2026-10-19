@@ -19,11 +19,12 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from datetime import date
 from enum import StrEnum
 from pathlib import Path
 
 from app.agents.draft_agent import NEEDS_REVIEW, DraftResult
-from app.agents.evidence_pack import EvidencePack
+from app.agents.evidence_pack import MONTHS, EvidencePack
 from app.config import Settings
 from app.drafting.operative import DEFAULT_LEGAL_BASIS
 from app.drafting.requirements import extract_requirements
@@ -47,6 +48,7 @@ class IssueType(StrEnum):
     CONTRADICTION = "CONTRADICTION"
     INCOMPLETE = "INCOMPLETE"
     JURISDICTION_MISMATCH = "JURISDICTION_MISMATCH"
+    OBJECTIONS_UNADDRESSED = "OBJECTIONS_UNADDRESSED"
 
 
 class Severity(StrEnum):
@@ -165,6 +167,35 @@ def _numbers_in(text: str) -> set[str]:
             continue
         out.add(digits)
     return out
+
+
+_MONTH_INDEX: dict[str, int] = {name: i + 1 for i, name in enumerate(MONTHS)}
+
+
+def _case_date(dates: list[str]) -> date | None:
+    """Дата, ближайшая к обращению в суд.
+
+    pack.dates хранит формат «5 марта 2013 года», из которого понятно
+    только слово и число. Редакция госпошлины выбирается по дате
+    обращения в суд, а не по сегодняшнему дню: реальные дела корпуса —
+    2012–2013 годов, и нынешний тариф к ним неприменим. Из дат
+    материалов берётся самая ранняя — дата иска обычно раньше всех
+    остальных дат дела, и это лучшая доступная оценка, а не решение
+    о дате обращения.
+    """
+    parsed: list[date] = []
+    for raw in dates:
+        m = re.match(r"(\d{1,2})\s+(\S+)\s+(\d{4})", str(raw))
+        if m is None:
+            continue
+        month = _MONTH_INDEX.get(m.group(2))
+        if month is None:
+            continue
+        try:
+            parsed.append(date(int(m.group(3)), month, int(m.group(1))))
+        except ValueError:
+            continue
+    return min(parsed) if parsed else None
 
 
 def _laws_in(text: str) -> set[tuple[str, str]]:
@@ -451,10 +482,19 @@ def verify_draft(
         # ── 4b. Госпошлина против расчётной ──────────────────────
         # Пошлину система берёт из материалов дела, а она там может быть
         # указана неверно. По НК РФ (ст. 333.19) размер пошлины считается
-        # от цены иска, и расхождение — повод показать судье оба числа.
+        # от цены иска по редакции, действовавшей на дату обращения,
+        # и расхождение — повод показать судье оба числа.
         if "резолютив" in section.name.lower():
             stated = extract_fee(text)
-            if stated is not None and not fee_matches(claim_total, stated):
+            fee_date = _case_date(pack.dates)
+            if stated is not None and not fee_matches(
+                claim_total, stated, on=fee_date
+            ):
+                edition = (
+                    f"по редакции, действовавшей на {fee_date:%d.%m.%Y}"
+                    if fee_date
+                    else "по действующей редакции"
+                )
                 report.issues.append(
                     Issue(
                         type=IssueType.UNSUPPORTED_CLAIM,
@@ -462,8 +502,9 @@ def verify_draft(
                         text=text[:200],
                         reason=(
                             f"госпошлина {stated:.2f} руб. не совпадает с "
-                            f"расчётной по цене иска {claim_total:.2f} руб.: "
-                            f"{state_fee(claim_total):.2f} руб. (НК РФ, ст. 333.19)"
+                            f"расчётной по цене иска {claim_total:.2f} руб. "
+                            f"{edition}: {state_fee(claim_total, fee_date):.2f} "
+                            "руб. (НК РФ, ст. 333.19)"
                         ),
                         section=section.name,
                     )
@@ -505,6 +546,32 @@ def verify_draft(
                     text=text[:200],
                     reason=role_finding.detail,
                     section=role_finding.section,
+                )
+            )
+
+    # ── Позиция ответчика (ст. 12, ч. 3–4 ст. 198 ГПК РФ) ──────────
+    # Возражения в деле есть, а в проекте нет ни одного довода — это
+    # нарушение состязательности, по которому в реальном процессе
+    # решение отменяют. Замечание ставится один раз на весь проект,
+    # а не на раздел: обсуждать возражения можно в любом разделе.
+    objection_texts = [i.text for i in pack.items if i.category == "objections"]
+    if objection_texts:
+        draft_text = "\n".join(s.text for s in draft.sections).lower()
+        markers = (
+            "довод", "возраж", "отклон", "не согласн", "оспор",
+            "приняты во внимание", "подтверждаются материалами",
+        )
+        if not any(marker in draft_text for marker in markers):
+            report.issues.append(
+                Issue(
+                    type=IssueType.OBJECTIONS_UNADDRESSED,
+                    severity=Severity.HIGH,
+                    text=objection_texts[0][:200],
+                    reason=(
+                        "в материалах дела есть возражения ответчика, "
+                        "но проект не отвечает ни на один довод "
+                        "(ст. 12, ч. 3–4 ст. 198 ГПК РФ)"
+                    ),
                 )
             )
 
