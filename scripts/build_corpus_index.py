@@ -255,6 +255,17 @@ async def embed_and_store(
         chunk_overlap=120,
     )
     provider = build_embedding_provider(cfg)
+    # Проверка до начала работы. Без неё падение выглядит как ошибка
+    # соединения в середине многочасового прогона: на этой машине Ollama
+    # то есть, то нет, и три запуска подряд ушли на одно и то же.
+    if not await provider.health():
+        raise RuntimeError(
+            "Модель эмбеддингов недоступна. Обычно это значит, что не "
+            "запущена Ollama:\n"
+            "  $env:OLLAMA_MODELS='D:\\ollama\\models\\models'\n"
+            "  $env:OLLAMA_HOST='127.0.0.1:11434'\n"
+            "  D:\\ollama\\app\\ollama.exe serve"
+        )
     print(f"эмбеддинги: {provider.name}, размерность {provider.dimension}")
 
     client = QdrantClient(path=str(index_path / "qdrant"))
