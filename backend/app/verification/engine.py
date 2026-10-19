@@ -31,6 +31,7 @@ from app.drafting.requirements import extract_requirements
 from app.verification.jurisdiction import check_jurisdiction
 from app.verification.laws import LawRegistry, extract_fee, fee_matches, state_fee
 from app.verification.persons import check_section
+from app.verification.subject_of_proof import ProofFact, subject_of_proof
 
 
 class VerificationStatus(StrEnum):
@@ -87,6 +88,10 @@ class VerificationReport:
     sections_checked: int = 0
     claims_checked: int = 0
     unsupported_claims: int = 0
+    # Таблица «обстоятельство — доказательства» по предмету доказывания.
+    # Это не замечание, а карта: судье виднее, что поставками считать,
+    # поэтому в статус проверки не входит.
+    facts: list[ProofFact] = field(default_factory=list)
 
     @property
     def needs_review(self) -> bool:
@@ -106,24 +111,40 @@ class VerificationReport:
             "claims_checked": self.claims_checked,
             "unsupported_claims": self.unsupported_claims,
             "by_severity": self.by_severity(),
+            "subject_of_proof": [f.to_dict() for f in self.facts],
         }
 
     def human_summary(self) -> str:
-        if not self.issues:
+        # Неподтверждённые обстоятельства показываются и без замечаний:
+        # таблица предмета доказывания — самостоятельная ценность, и
+        # «Замечаний нет» на пустой таблице прятало бы пробел дела.
+        uncovered = [f for f in self.facts if not f.covered]
+        if not self.issues and not uncovered:
             return "Замечаний нет: все разделы опираются на материалы дела."
 
-        lines = [f"Статус проверки: {self.status.value}", ""]
+        lines = (
+            [f"Статус проверки: {self.status.value}", ""]
+            if self.issues
+            else ["Замечаний по разделам нет.", ""]
+        )
         for issue in self.issues:
             lines.append(
                 f"[{issue.severity.value}] {issue.section or 'проект целиком'}\n"
                 f"  {issue.type.value}: {issue.reason}\n"
                 f"  фрагмент: {issue.text[:140]}"
             )
-        counts = self.by_severity()
-        lines.append("")
-        lines.append(
-            "Итого: " + ", ".join(f"{k} — {v}" for k, v in sorted(counts.items()))
-        )
+        if self.issues:
+            counts = self.by_severity()
+            lines.append("")
+            lines.append(
+                "Итого: " + ", ".join(f"{k} — {v}" for k, v in sorted(counts.items()))
+            )
+        uncovered = [f for f in self.facts if not f.covered]
+        if uncovered:
+            lines.append("")
+            lines.append("Ни одним документом не подтверждено (предмет доказывания):")
+            for fact in uncovered:
+                lines.append(f"  — {fact.circumstance}")
         return "\n".join(lines)
 
 
@@ -574,6 +595,12 @@ def verify_draft(
                     ),
                 )
             )
+
+    # ── Таблица «обстоятельство — доказательства» ──────────────────
+    # Считается по материалам, а не по проекту: она отвечает на вопрос,
+    # откуда взято каждое обстоятельство, и её нельзя подделать текстом
+    # модели.
+    report.facts = subject_of_proof(pack.items)
 
     # ── Итоговый статус ────────────────────────────────────────────
     critical = [i for i in report.issues if i.severity is Severity.CRITICAL]
