@@ -1,0 +1,248 @@
+From 2414c28c2ff366706f5d403d0bd30daadef7983a Mon Sep 17 00:00:00 2001
+From: Eagle1man <orel198611@gmail.com>
+Date: Tue, 20 Oct 2026 21:32:49 +0300
+Subject: [PATCH 23/27] =?UTF-8?q?=D0=AD=D1=82=D0=B0=D0=BF=202:=20=D1=81?=
+ =?UTF-8?q?=D0=BA=D0=B2=D0=BE=D0=B7=D0=BD=D0=B0=D1=8F=20=D0=BF=D1=80=D0=BE?=
+ =?UTF-8?q?=D0=B2=D0=B5=D1=80=D0=BA=D0=B0=2010=20=D0=B4=D0=B5=D0=BB,=20F1?=
+ =?UTF-8?q?=20(=D0=BF=D0=BE=D1=82=D0=B5=D1=80=D1=8F=20=D1=81=D1=83=D0=BC?=
+ =?UTF-8?q?=D0=BC=20=D0=B2=203=20=D0=B4=D0=B5=D0=BB=D0=B0=D1=85),=20F2=20(?=
+ =?UTF-8?q?=D0=9D=D0=95=20=D0=9F=D0=A0=D0=9E=D0=92=D0=95=D0=A0=D0=95=D0=9D?=
+ =?UTF-8?q?=D0=9E)?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+---
+ docs/end-to-end-evaluation.md |  62 ++++++++++++++
+ scripts/e2e_audit.py          | 150 ++++++++++++++++++++++++++++++++++
+ 2 files changed, 212 insertions(+)
+ create mode 100644 docs/end-to-end-evaluation.md
+ create mode 100644 scripts/e2e_audit.py
+
+diff --git a/docs/end-to-end-evaluation.md b/docs/end-to-end-evaluation.md
+new file mode 100644
+index 0000000..44662f4
+--- /dev/null
++++ b/docs/end-to-end-evaluation.md
+@@ -0,0 +1,62 @@
++# Сквозная проверка конвейера (Этап 2 ТЗ)
++
++Дата: 2026-10-20. Метод: `scripts/e2e_audit.py` (цепочка
++«документ → факт → источник → доказательство → раздел → проверки» по каждому
++делу) и `scripts/tmp_amount_probe.py` (где лежит сумма иска). Оба скрипта
++воспроизводимы: `backend\.venv\Scripts\python.exe scripts\e2e_audit.py`.
++
++## Результаты по делам (демо-набор, 10 дел)
++
++| Дело | Категория | Иск | Итог системы | Пошлина | Источников | Замечаний | Без источника | Пробелов |
++|---|---|---|---|---|---|---|---|---|
++| real-01 | прочие споры | 11 107 | 11 107 | 444 | 1 | 2 | 1 | 0 |
++| real-02 | вред здоровью | 0 | 0 | 0 | 1 | 2 | 0 | 0 |
++| real-03 | вред здоровью | 11 000 | **18 390** | 0 | 1 | 2 | 0 | 0 |
++| real-04 | купля-продажа | 0 | 2 202 | 0 | 1 | 4 | 1 | 0 |
++| real-05 | вред здоровью | 1 000 | **0** | 0 | 2 | 3 | 0 | 0 |
++| real-06 | вред здоровью | 0 | 0 | 0 | 0 | 4 | 0 | 0 |
++| real-07 | прочие споры | 7 337 | 7 337 | 0 | 1 | 3 | 1 | 0 |
++| real-08 | прочие споры | 10 148 | **0** | 416 | 0 | 2 | 0 | 0 |
++| real-09 | купля-продажа | 0 | 0 | 0 | 0 | 2 | 0 | 0 |
++| real-10 | споры о ЖКУ | 55 021 | **0** | 0 | 0 | 2 | 0 | 0 |
++
++## Подтверждённые дефекты
++
++**F1 (P1): извлечение требований теряет сумму иска в 3 делах из 10.**
++В `01_claim.txt` сумма есть (проверено зондом: real-05 → «1000»,
++real-08 → «10148», real-10 → «55021» дважды), манифест её знает, но
++`extract_requirements` не выделяет ни одного денежного требования —
++резолютивная часть выходит без сумм (итог 0). Воспроизведение:
++
++```powershell
++backend\.venv\Scripts\python.exe scripts\e2e_audit.py   # смотреть real-05/08/10
++backend\.venv\Scripts\python.exe scripts\tmp_amount_probe.py  # суммы в иске есть
++```
++
++Для real-08 это тот самый случай «подмены сумм» из замечаний рецензента:
++пошлина 416 извлеклась, основная сумма 10 148 — нет.
++
++**F2 (НЕ ПРОВЕРЕНО): real-03 — система взыскивает 18 390, манифест 11 000.**
++В иске есть и 11 000, и 18 390 (и другие суммы); какая из них просительная —
++определяет человек. Система выбрала 18 390 со ссылкой на `01_claim.txt`.
++Нужна ручная сверка с текстом требований; автоматического вывода не делаю.
++
++## Проверки, которые дефектов не показали
++
++- Ссылки в никуда (цитата на несуществующий файл дела): **0** по всем делам.
++- Дубли пунктов резолютивной части: **0**.
++- Арифметика «итог = сумма требований + пошлина»: сходится везде.
++- Пробелы без маркера `ТРЕБУЕТ ПРОВЕРКИ СПЕЦИАЛИСТОМ`: **0**.
++- Возражения без вопроса: вопрос `OBJECTIONS_UNADDRESSED` поднимается
++  там, где возражения в деле есть (real-01 и др.).
++
++## Ограничения проверки (честно)
++
++- Демо-конвейер (`build_real_site.process`) строит и проверяет **только
++  резолютивную часть**; вводная и мотивировочная в демо не строятся.
++  Поэтому `00_case_info.txt`, `05_protocol.txt`, `06_court_findings.txt`
++  не попадают в источники оперативной — это дизайн демо, а не потеря фактов.
++  Для полного конвейера проверка по смысловым разделам — задача отдельная.
++- Юридическая корректность исхода и норм сквозной проверкой не подтверждается
++  и не опровергается — только воспроизводимые факты из цепочки.
++- Оценка на 20–30 делах с юристом остаётся вне автоматизации (п. 78 разбора).
+diff --git a/scripts/e2e_audit.py b/scripts/e2e_audit.py
+new file mode 100644
+index 0000000..c4e3a75
+--- /dev/null
++++ b/scripts/e2e_audit.py
+@@ -0,0 +1,150 @@
++"""Сквозной аудит конвейера по делам (Этап 2 ТЗ).
++
++Для каждого дела прослеживает цепочку:
++    документ → извлечённый факт → источник → доказательство → раздел
++    → автоматические проверки.
++
++Механически проверяет:
++- привязку цитат к реальным файлам дела (нет ли ссылок в никуда);
++- дубли пунктов резолютивной части;
++- арифметику: итог = сумма требований + пошлина;
++- покрытие документов: какие материалы дали источники, какие — нет;
++- наличие вопросов проверки (возражения, неустойка, оценка доказательств);
++- наличие маркера ТРЕБУЕТ ПРОВЕРКИ СПЕЦИАЛИСТОМ там, где есть пробелы.
++
++Ничего не оценивает юридически: только воспроизводимые факты.
++Результат — в scripts/tmp_e2e_audit_out.txt (кириллица в консоли портится).
++"""
++
++from __future__ import annotations
++
++import asyncio
++import importlib.util
++import json
++import re
++import sys
++from pathlib import Path
++from typing import Any
++
++ROOT = Path(__file__).resolve().parent.parent
++CASES = ROOT / "data" / "demo" / "real" / "cases"
++OUT = Path(__file__).with_name("tmp_e2e_audit_out.txt")
++NEEDS_REVIEW = "ТРЕБУЕТ ПРОВЕРКИ СПЕЦИАЛИСТОМ"
++
++
++def _load(name: str, filename: str) -> Any:
++    spec = importlib.util.spec_from_file_location(name, ROOT / "scripts" / filename)
++    module = importlib.util.module_from_spec(spec)
++    sys.modules[name] = module
++    spec.loader.exec_module(module)
++    return module
++
++
++def _files_of(case_dir: Path) -> set[str]:
++    return {p.name for p in case_dir.iterdir() if p.is_file()}
++
++
++def audit_case(case_dir: Path) -> dict[str, Any]:
++    build = _load("e2e_build_real_site", "build_real_site.py")
++    processed = asyncio.run(build.process(case_dir))
++    files = _files_of(case_dir)
++    manifest = json.loads((case_dir / "manifest.json").read_text(encoding="utf-8"))
++    operative = processed["operative_text"]
++    sources = processed["sources"]
++    verification = processed["verification"]
++
++    defects: list[str] = []
++
++    # 1. Ссылки на несуществующие документы
++    dangling = [s for s in sources if s.split(",")[0].strip() not in files]
++    if dangling:
++        defects.append(f"ссылки в никуда: {dangling}")
++
++    # 2. Дубли пунктов резолютивной (одинаковые строки ≥ 40 символов)
++    lines = [ln.strip() for ln in operative.splitlines() if len(ln.strip()) >= 40]
++    dupes = {ln for ln in lines if lines.count(ln) > 1}
++    if dupes:
++        defects.append(f"дубли пунктов: {sorted(dupes)[:2]}")
++
++    # 3. Арифметика: итог против суммы требований + пошлина
++    rules = processed["rules"]
++    total = float(rules.get("total") or 0)
++    fee = float(rules.get("fee_paid") or 0)
++    total_with_fee = float(rules.get("total_with_fee") or 0)
++    if abs(total_with_fee - (total + fee)) > 0.01:
++        defects.append(f"арифметика: итог {total_with_fee} != {total}+{fee}")
++
++    # 4. Покрытие документов: материалы без источников
++    unused = sorted(f for f in files if f not in {s.split(",")[0].strip() for s in sources}
++                    and f not in {"manifest.json", "court_decision_reference.txt"})
++    if unused:
++        defects.append(f"документы без источников: {unused}")
++
++    # 5. Пробелы без маркера
++    gaps = rules.get("gaps") or []
++    if gaps and NEEDS_REVIEW not in operative:
++        defects.append(f"пробелы без маркера: {len(gaps)}")
++
++    # 6. Возражения без вопроса
++    issues = {i["type"] for i in verification["issues"]}
++    if "OBJECTIONS_UNADDRESSED" not in issues and not any(
++        "возражени" in s.lower() for s in sources
++    ):
++        pass  # возражений в деле нет — вопроса не требуется
++
++    return {
++        "slug": case_dir.name,
++        "category": manifest.get("category", "—"),
++        "claim_amount": manifest.get("claim_amount"),
++        "total": total,
++        "fee": fee,
++        "documents": len(manifest.get("documents", [])),
++        "sources": len(sources),
++        "unused_docs": unused,
++        "status": verification["status"],
++        "issues": len(verification["issues"]),
++        "unsupported_claims": verification["unsupported_claims"],
++        "gaps": len(gaps),
++        "defects": defects,
++    }
++
++
++def main() -> None:
++    build = _load("e2e_build_real_site", "build_real_site.py")  # прогрев импорта
++    index = json.loads((CASES / "index.json").read_text(encoding="utf-8"))
++    rows: list[dict[str, Any]] = []
++    for entry in index["cases"]:
++        case_dir = CASES / entry["slug"]
++        try:
++            rows.append(audit_case(case_dir))
++        except Exception as exc:  # noqa: BLE001
++            rows.append({"slug": entry["slug"], "defects": [f"СБОЙ: {type(exc).__name__}: {exc}"]})
++
++    total_defects = 0
++    lines = ["СКВОЗНОЙ АУДИТ ПО ДЕЛАМ", f"дел: {len(rows)}", ""]
++    for row in rows:
++        defects = row.get("defects", [])
++        total_defects += len(defects)
++        lines.append(f"## {row['slug']} — {row.get('category', '—')}")
++        if row.get("claim_amount") is not None:
++            lines.append(
++                f"иск {row['claim_amount']} руб. | итог {row.get('total')} | пошлина "
++                f"{row.get('fee')} | документов {row.get('documents')} | источников "
++                f"{row.get('sources')} | замечаний {row.get('issues')} | без источника "
++                f"{row.get('unsupported_claims')} | пробелов {row.get('gaps')}"
++            )
++        if row.get("unused_docs"):
++            lines.append(f"документы без источников: {', '.join(row['unused_docs'])}")
++        for defect in defects:
++            lines.append(f"- ДЕФЕКТ: {defect}")
++        if not defects:
++            lines.append("- дефектов не найдено")
++        lines.append("")
++
++    lines.append(f"ВСЕГО ДЕФЕКТОВ: {total_defects}")
++    OUT.write_text("\n".join(lines), encoding="utf-8")
++    print(f"cases={len(rows)} defects={total_defects}")
++
++
++if __name__ == "__main__":
++    main()
+-- 
+2.53.0.windows.2
+

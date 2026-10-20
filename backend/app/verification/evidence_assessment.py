@@ -153,24 +153,32 @@ def check_evidence_assessment(
         break  # Один вопрос, а не пачка на каждый глагол.
 
     covered_any = any(marker in lower for _name, marker in CRITERIA)
-    if covered_any:
-        return findings
 
     expert_in_case = any(_EXPERT_RE.search(text) for text in material_texts)
     if expert_in_case and _EXPERT_RE.search(lower):
-        findings.append(
-            AssessmentFinding(
-                kind="expert_unassessed",
-                reason=(
-                    "в деле заключение эксперта, проект ссылается на "
-                    "него, но не содержит оценки по критериям ст. 67 ГПК "
-                    "РФ: заключение исследуется наравне с другими "
-                    "доказательствами, оценивает его суд (ч. 3 ст. 86 ГПК "
-                    "РФ)"
-                ),
-            )
+        # Оценён ли эксперт по существу: критерий ст. 67 в том же
+        # предложении, что и упоминание экспертизы. Упоминание критерия
+        # в другом месте проекта не отменяет вопрос (дефект D6), но и
+        # явная оценка эксперта вопроса не вызывает.
+        assessed = any(
+            _EXPERT_RE.search(sentence)
+            and any(marker in sentence for _name, marker in CRITERIA)
+            for sentence in re.split(r"[.\n]", lower)
         )
-    elif _EVIDENCE_RE.search(lower):
+        if not assessed:
+            findings.append(
+                AssessmentFinding(
+                    kind="expert_unassessed",
+                    reason=(
+                        "в деле заключение эксперта, проект ссылается на "
+                        "него, но не содержит оценки по критериям ст. 67 ГПК "
+                        "РФ: заключение исследуется наравне с другими "
+                        "доказательствами, оценивает его суд (ч. 3 ст. 86 ГПК "
+                        "РФ)"
+                    ),
+                )
+            )
+    elif not covered_any and _EVIDENCE_RE.search(lower):
         findings.append(
             AssessmentFinding(
                 kind="not_assessed",

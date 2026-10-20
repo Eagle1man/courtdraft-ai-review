@@ -671,6 +671,11 @@ cd backend
 | [`SECURITY.md`](SECURITY.md) | Безопасность и известные ограничения |
 | [`docs/legal-regime.md`](docs/legal-regime.md) | Правовой режим данных: история версий, тайна совещания, Указ № 490 |
 | [`docs/evaluation.md`](docs/evaluation.md) | Оценка качества на делах с известным итогом: ведомость для юриста |
+| [`docs/qd-court-design.md`](docs/qd-court-design.md) | QD-Court: архитектура экспериментального поиска направлений анализа |
+| [`docs/qd-court-evaluation.md`](docs/qd-court-evaluation.md) | QD-Court: сравнение режимов A/B/C на 10 делах |
+| [`docs/agent-audit-baseline.md`](docs/agent-audit-baseline.md) | Базлайн аудита: тесты, секреты, состояние репозитория |
+| [`docs/agent-review-results.md`](docs/agent-review-results.md) | Ревью восьми замечаний: вердикты и дефекты D1–D6 |
+| [`docs/end-to-end-evaluation.md`](docs/end-to-end-evaluation.md) | Сквозная проверка конвейера по 10 делам |
 | [`CONTRIBUTING.md`](CONTRIBUTING.md) | Как участвовать |
 | [`docs/deployment-rtx3050.md`](docs/deployment-rtx3050.md) | Развёртывание на RTX 3050 |
 

@@ -1,0 +1,87 @@
+From e20b1ab4abbf40eabdb554070eef8380ce03a34d Mon Sep 17 00:00:00 2001
+From: Eagle1man <orel198611@gmail.com>
+Date: Tue, 20 Oct 2026 21:22:02 +0300
+Subject: [PATCH 21/27] =?UTF-8?q?=D0=AD=D1=82=D0=B0=D0=BF=200:=20=D0=B1?=
+ =?UTF-8?q?=D0=B0=D0=B7=D0=BB=D0=B0=D0=B9=D0=BD=20=D0=B0=D1=83=D0=B4=D0=B8?=
+ =?UTF-8?q?=D1=82=D0=B0=20(688=20=D1=82=D0=B5=D1=81=D1=82=D0=BE=D0=B2,=20r?=
+ =?UTF-8?q?uff,=20mypy=20=D1=87=D0=B8=D1=81=D1=82=D0=BE;=20=D1=81=D0=B5?=
+ =?UTF-8?q?=D0=BA=D1=80=D0=B5=D1=82=D0=BE=D0=B2=20=D0=BD=D0=B5=D1=82)?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+---
+ docs/agent-audit-baseline.md | 61 ++++++++++++++++++++++++++++++++++++
+ 1 file changed, 61 insertions(+)
+ create mode 100644 docs/agent-audit-baseline.md
+
+diff --git a/docs/agent-audit-baseline.md b/docs/agent-audit-baseline.md
+new file mode 100644
+index 0000000..33eebd5
+--- /dev/null
++++ b/docs/agent-audit-baseline.md
+@@ -0,0 +1,61 @@
++# Базлайн аудита (Этап 0 ТЗ)
++
++Дата: 2026-10-20. Ветка: `feat/phase-6-10-api-docs`. HEAD: `3fa9806`
++(«Статус рецензента: восемь пунктов плана закрыты, сводка пересчитана»).
++Рабочий каталог: `D:\courtdraft-ai`.
++
++## Воспроизводимые команды и фактический результат
++
++| Проверка | Команда | Результат |
++|---|---|---|
++| Тесты | `backend\.venv\Scripts\python.exe -m pytest -q -p no:warnings` | **688 passed, 0 failed, 0 errors**, exit 0 (junit: `scripts/tmp_junit_base.xml`) |
++| Линтер | `... -m ruff check app tests` | чисто, exit 0 |
++| Типы | `... -m mypy --strict app` | чисто, exit 0 |
++| Состояние git | `git status --short`, `git log --oneline -3` | рабочее дерево чисто, кроме untracked `scripts/tmp_*` (диагностика, в git не идёт) |
++| Секреты | `scripts/tmp_audit_secrets.py` → `scripts/tmp_audit_secrets_out.txt` | 204 отслеживаемых файла, 0 подозрительных имён |
++
++## Аудит секретов и запрещённых данных
++
++- Отслеживаемых файлов: **204**. Файлов с именами `.env`, `*.key`, `id_rsa`,
++  `credentials.json` и т. п. в индексе — **нет**.
++- Содержимое: 5 совпадений с признаками секретов, **все — заглушки**, проверены
++  построчно:
++  - `.env.example` → `SECRET_KEY=change-me-in-production`, `POSTGRES_PASSWORD=courtdraft`;
++  - `docker-compose.yml` → `POSTGRES_PASSWORD:-courtdraft` (дефолт для локальной разработки);
++  - `docs/deployment-rtx3050.md` → `POSTGRES_PASSWORD=выберите_свой_пароль` (инструкция);
++  - `backend/app/db/session.py` → `defaults["postgres_password"].default` (код читает дефолт, значение не захардкожено).
++- `.env` (реальный) на диске есть, **в git не отслеживается**.
++- `git check-ignore` подтверждает игнорирование: `data/demo/real`, `data/eval`,
++  `data/cases`, `data/lora` (в основном репозитории).
++- Индексы корпуса и `.venv` в индексе отсутствуют.
++
++## Недоступные проверки и инструменты
++
++- **Ollama не установлен** (`ollama.exe` не найден, порт 11434 молчит).
++  Локальный LLM-провайдер (`app/llm/ollama_provider.py`) сейчас нерабочий;
++  QD-Court MVP проектируется без обязательной модели, с безопасным возвратом
++  на конвейер без поиска (п. 8 ТЗ).
++- **QD-Rec** (`github.com/SakanaAI/QD-Rec`, публичный, Apache-2.0) изучен:
++  оригинал ходит в OpenRouter (`OPENROUTER_API_KEY`, облако) — локально без
++  ключа не запускается. Перенимаются только архитектурные идеи: архив
++  item–hypothesis, novelty-first admission, локальная конкуренция,
++  explore/mutate, статус `active` у живых записей и сохранение вытесненных.
++- Дополнительные методологические ссылки ТЗ (lawgent,
++  legal-ai-hallucination-benchmark, legal-rag-eval) не запускались —
++  это источники подхода, а не код для интеграции.
++
++## Расхождения кода и документации
++
++- `SECURITY.md` — актуален (пункт про аудит исправлен в `fa4efe0`).
++- `README.md` — содержит строки `docs/legal-regime.md` и `docs/evaluation.md`.
++- `docs/reviewer-status.md` — актуален (30/13/4), ссылается на коммиты до `be65af6`.
++- Известные незакрытые пункты остаются как в `docs/reviewer-status.md`
++  (пропорциональность расходов, возврат пошлины, вывод исхода, предмет
++  доказывания других категорий, сквозная проверка на живых делах,
++  сама юридическая оценка на 20–30 делах).
++
++## Подтверждённые дефекты на этапе 0
++
++Блокирующих дефектов не выявлено. Все проверки проходят; риски — те же,
++что в `docs/reviewer-status.md` (ЧАСТИЧНО: покрытие доказательств, подбор
++норм, подмена сумм; НЕ СДЕЛАНО: 4 пункта). Детальный разбор — в Этапе 1.
+-- 
+2.53.0.windows.2
+

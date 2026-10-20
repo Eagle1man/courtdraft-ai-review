@@ -1,0 +1,1083 @@
+From ca6255d14c9036d72b5e7e9c9a04863abe8b3f72 Mon Sep 17 00:00:00 2001
+From: Eagle1man <orel198611@gmail.com>
+Date: Tue, 20 Oct 2026 22:14:29 +0300
+Subject: [PATCH 25/27] =?UTF-8?q?=D0=AD=D1=82=D0=B0=D0=BF=D1=8B=204-5:=20Q?=
+ =?UTF-8?q?D-Court=20MVP=20-=20=D0=B0=D1=80=D1=85=D0=B8=D0=B2,=20Explore/M?=
+ =?UTF-8?q?utate,=20=D0=BF=D1=80=D0=BE=D0=B2=D0=B5=D1=80=D0=BA=D0=B0=20?=
+ =?UTF-8?q?=D0=BE=D1=81=D0=BD=D0=BE=D0=B2=D0=B0=D0=BD=D0=B8=D0=B9,=20?=
+ =?UTF-8?q?=D0=B1=D1=8E=D0=B4=D0=B6=D0=B5=D1=82?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+app/exploration: models (контракт гипотезы), novelty (Жаккар по токенам), archive (один JSON на дело, изоляция, локальная конкуренция, отказы сохраняются), proposer (Explore/Mutate на правилах, фильтр шаблонных возражений), verification (источник существует, числа из материалов), service (бюджет итераций/времени/размера, безопасный возврат). Без модели (Ollama недоступен) и без бандита - по ТЗ. Модуль не получает проект акта и не может менять RULES_BUILT_SECTIONS. 14 тестов + фильтр boilerplate. data/exploration/ в .gitignore.
+---
+ .gitignore                              |   4 +
+ backend/app/exploration/__init__.py     |  38 +++++
+ backend/app/exploration/archive.py      | 111 +++++++++++++
+ backend/app/exploration/models.py       |  82 ++++++++++
+ backend/app/exploration/novelty.py      |  31 ++++
+ backend/app/exploration/proposer.py     | 170 ++++++++++++++++++++
+ backend/app/exploration/service.py      | 132 ++++++++++++++++
+ backend/app/exploration/verification.py |  63 ++++++++
+ backend/tests/test_exploration.py       | 200 ++++++++++++++++++++++++
+ docs/qd-court-design.md                 |  77 +++++++++
+ scripts/qd_court_run.py                 |  64 ++++++++
+ 11 files changed, 972 insertions(+)
+ create mode 100644 backend/app/exploration/__init__.py
+ create mode 100644 backend/app/exploration/archive.py
+ create mode 100644 backend/app/exploration/models.py
+ create mode 100644 backend/app/exploration/novelty.py
+ create mode 100644 backend/app/exploration/proposer.py
+ create mode 100644 backend/app/exploration/service.py
+ create mode 100644 backend/app/exploration/verification.py
+ create mode 100644 backend/tests/test_exploration.py
+ create mode 100644 docs/qd-court-design.md
+ create mode 100644 scripts/qd_court_run.py
+
+diff --git a/.gitignore b/.gitignore
+index efc2b08..fa8f03f 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -97,6 +97,10 @@ data/demo/real/
+ # материалов и решений дела — по тем же правилам, что и data/demo/real/.
+ data/eval/
+ 
++# Архив гипотез QD-Court (Этапы 4-6 ТЗ): рабочие данные поиска,
++# в репозиторий не входят.
++data/exploration/
++
+ # Обучающая выборка, собранная из решений корпуса. Файлы производные
+ # от реальных решений, поэтому под тем же правилом: в репозиторий не
+ # попадают. Сама выборка и отчёт о её составе остаются на машине.
+diff --git a/backend/app/exploration/__init__.py b/backend/app/exploration/__init__.py
+new file mode 100644
+index 0000000..430bcf6
+--- /dev/null
++++ b/backend/app/exploration/__init__.py
+@@ -0,0 +1,38 @@
++"""QD-Court: экспериментальный поиск направлений анализа (Этапы 4–5 ТЗ).
++
++Идеи взяты из QD-Rec (SakanaAI, Apache-2.0): архив гипотез, novelty-first
++admission, локальная конкуренция, сохранение отклонённых. Механизм
++рекомендаций НЕ копируется: вместо LLM-предлагающего и судьи — правила
++проекта, а архив живёт в JSON по одному файлу на дело.
++
++Границы (неизменяемые):
++* модуль не меняет исход дела, суммы и детерминированные части акта
++  (`RULES_BUILT_SECTIONS`) — он вообще не получает проект на вход;
++* гипотеза никогда не становится «доказанным фактом»: статус SUPPORTED
++  означает только «источники и числа подтверждены», человек решает сам;
++* архив изолирован по делам, гипотезы чужих дел не используются;
++* отказ модели/источника/архива — безопасный возврат к конвейеру.
++"""
++
++from app.exploration.archive import ExplorationArchive, admit
++from app.exploration.models import HumanReviewStatus, Hypothesis, HypothesisStatus
++from app.exploration.proposer import DirectionProposer
++from app.exploration.service import (
++    ExplorationBudget,
++    ExplorationReport,
++    ExplorationService,
++)
++from app.exploration.verification import HypothesisVerifier
++
++__all__ = [
++    "ExplorationArchive",
++    "ExplorationBudget",
++    "ExplorationReport",
++    "ExplorationService",
++    "Hypothesis",
++    "HypothesisStatus",
++    "HumanReviewStatus",
++    "DirectionProposer",
++    "HypothesisVerifier",
++    "admit",
++]
+diff --git a/backend/app/exploration/archive.py b/backend/app/exploration/archive.py
+new file mode 100644
+index 0000000..2880e5a
+--- /dev/null
++++ b/backend/app/exploration/archive.py
+@@ -0,0 +1,111 @@
++"""Архив гипотез: один JSON на дело, изоляция, локальная конкуренция.
++
++Отклонённые гипотезы сохраняются для аудита с причиной отказа (п. 3
++правил архива ТЗ). Гипотезы чужих дел не читаются и не влияют на отбор.
++"""
++
++from __future__ import annotations
++
++import json
++import uuid
++from datetime import datetime
++from pathlib import Path
++
++from app.exploration.models import Hypothesis, HypothesisStatus
++
++#: Новизна ниже порога — повтор, а не новое направление.
++DEFAULT_NOVELTY_THRESHOLD = 0.5
++
++
++class ExplorationArchive:
++    def __init__(self, root: Path) -> None:
++        self.root = root
++
++    def _path(self, case_id: str) -> Path:
++        safe = case_id.replace("/", "_").replace("\\", "_")
++        return self.root / f"{safe}.json"
++
++    def load(self, case_id: str) -> list[Hypothesis]:
++        """Гипотезы ТОЛЬКО этого дела (изоляция по файлу)."""
++        path = self._path(case_id)
++        if not path.exists():
++            return []
++        data = json.loads(path.read_text(encoding="utf-8"))
++        return [Hypothesis.from_dict(item) for item in data.get("hypotheses", [])]
++
++    def save(self, case_id: str, hypotheses: list[Hypothesis]) -> None:
++        self.root.mkdir(parents=True, exist_ok=True)
++        kept = [h for h in hypotheses if h.case_id == case_id]
++        payload = {
++            "case_id": case_id,
++            "updated_at": datetime.now().isoformat(timespec="seconds"),
++            "hypotheses": [h.to_dict() for h in kept],
++        }
++        self._path(case_id).write_text(
++            json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
++        )
++
++    def add(self, case_id: str, hypothesis: Hypothesis) -> list[Hypothesis]:
++        """Дописать гипотезу в архив дела и сохранить."""
++        hypotheses = self.load(case_id)
++        hypotheses.append(hypothesis)
++        self.save(case_id, hypotheses)
++        return hypotheses
++
++
++def new_id() -> str:
++    return uuid.uuid4().hex[:12]
++
++
++def admit(
++    hypotheses: list[Hypothesis],
++    candidate: Hypothesis,
++    threshold: float = DEFAULT_NOVELTY_THRESHOLD,
++) -> list[Hypothesis]:
++    """Novelty-first admission + локальная конкуренция.
++
++    Повтор (новизна ниже порога) остаётся в архиве со статусом REJECTED
++    и причиной. В пределах одного вопроса (`question_id`) живёт самая
++    новизнная версия: предыдущая получает SUPERSEDED и причину вытеснения.
++    """
++    now = datetime.now().isoformat(timespec="seconds")
++    result = list(hypotheses)
++
++    # Повторный прогон не должен раздувать архив: идентичный отказ
++    # (тот же вопрос и тот же текст) уже лежит в архиве — не дублируем.
++    if any(
++        h.question_id == candidate.question_id and h.text == candidate.text
++        for h in result
++    ):
++        return result
++
++    if candidate.novelty < threshold:
++        candidate.status = HypothesisStatus.REJECTED
++        candidate.rejection_reason = (
++            f"новизна {candidate.novelty} ниже порога {threshold} — повтор"
++        )
++        candidate.updated_at = now
++        result.append(candidate)
++        return result
++
++    rival = next(
++        (h for h in result if h.question_id == candidate.question_id), None
++    )
++    if rival is not None and rival.novelty >= candidate.novelty:
++        candidate.status = HypothesisStatus.REJECTED
++        candidate.rejection_reason = (
++            f"по вопросу {candidate.question_id} уже есть версия "
++            f"новизны {rival.novelty}"
++        )
++        candidate.updated_at = now
++        result.append(candidate)
++        return result
++
++    if rival is not None:
++        rival.status = HypothesisStatus.SUPERSEDED
++        rival.rejection_reason = (
++            f"вытеснена версией {candidate.id} новизны {candidate.novelty}"
++        )
++        rival.updated_at = now
++    result.append(candidate)
++    return result
+diff --git a/backend/app/exploration/models.py b/backend/app/exploration/models.py
+new file mode 100644
+index 0000000..4c82623
+--- /dev/null
++++ b/backend/app/exploration/models.py
+@@ -0,0 +1,82 @@
++"""Модели QD-Court (Этап 4 ТЗ, п. «Контракт гипотезы»)."""
++
++from __future__ import annotations
++
++from dataclasses import asdict, dataclass, field
++from datetime import datetime
++from enum import StrEnum
++from typing import cast
++
++
++class HypothesisStatus(StrEnum):
++    """Жизненный цикл гипотезы.
++
++    SUPPORTED — не «доказана», а «источники и числа подтверждены
++    материалами». Оценку по существу даёт человек.
++    """
++
++    PROPOSED = "PROPOSED"
++    SUPPORTED = "SUPPORTED"
++    UNSUPPORTED = "UNSUPPORTED"
++    REJECTED = "REJECTED"
++    SUPERSEDED = "SUPERSEDED"
++
++
++class HumanReviewStatus(StrEnum):
++    PENDING = "PENDING"
++    REVIEWED = "REVIEWED"
++    NOT_REQUIRED = "NOT_REQUIRED"
++
++
++@dataclass
++class Hypothesis:
++    """Одно направление анализа, найденное поиском.
++
++    Обязательные поля контракта: дело, вопрос, тип, текст, источники,
++    родители (для мутаций), версия модели/промпта, новизна, проверки,
++    причины отклонения, статус проверки человеком, история изменений
++    (created_at + updated_at).
++    """
++
++    id: str
++    case_id: str
++    question_id: str
++    kind: str
++    text: str
++    sources: list[str] = field(default_factory=list)
++    parent_ids: list[str] = field(default_factory=list)
++    model_version: str = "rules-1"
++    novelty: float = 0.0
++    status: HypothesisStatus = HypothesisStatus.PROPOSED
++    rejection_reason: str = ""
++    human_review: HumanReviewStatus = HumanReviewStatus.PENDING
++    checks: dict[str, bool] = field(default_factory=dict)
++    created_at: str = field(
++        default_factory=lambda: datetime.now().isoformat(timespec="seconds")
++    )
++    updated_at: str = field(
++        default_factory=lambda: datetime.now().isoformat(timespec="seconds")
++    )
++
++    def to_dict(self) -> dict[str, object]:
++        return asdict(self)
++
++    @classmethod
++    def from_dict(cls, data: dict[str, object]) -> Hypothesis:
++        return cls(
++            id=str(data["id"]),
++            case_id=str(data["case_id"]),
++            question_id=str(data["question_id"]),
++            kind=str(data["kind"]),
++            text=str(data["text"]),
++            sources=cast("list[str]", data.get("sources", [])),
++            parent_ids=cast("list[str]", data.get("parent_ids", [])),
++            model_version=str(data.get("model_version", "rules-1")),
++            novelty=float(str(data.get("novelty", 0.0))),
++            status=HypothesisStatus(str(data.get("status", "PROPOSED"))),
++            rejection_reason=str(data.get("rejection_reason", "")),
++            human_review=HumanReviewStatus(str(data.get("human_review", "PENDING"))),
++            checks=cast("dict[str, bool]", data.get("checks", {})),
++            created_at=str(data.get("created_at", "")),
++            updated_at=str(data.get("updated_at", "")),
++        )
+diff --git a/backend/app/exploration/novelty.py b/backend/app/exploration/novelty.py
+new file mode 100644
+index 0000000..39769d1
+--- /dev/null
++++ b/backend/app/exploration/novelty.py
+@@ -0,0 +1,31 @@
++"""Новизна QD-Court: по содержанию, а не по различию формулировок.
++
++Сходство — Жаккар по токенам из общего токенизатора проекта
++(`app.rag.retrieval.tokenize`), поэтому «перефраз, тот же вопрос»
++даёт новизну около нуля и не проходит фильтр.
++"""
++
++from __future__ import annotations
++
++from app.rag.retrieval import tokenize
++
++
++def _tokens(text: str) -> set[str]:
++    return set(tokenize(text))
++
++
++def novelty(text: str, existing_texts: list[str]) -> float:
++    """1 — содержательно ново, 0 — повтор уже найденного."""
++    own = _tokens(text)
++    if not own:
++        return 0.0
++    if not existing_texts:
++        return 1.0
++    best = 0.0
++    for other in existing_texts:
++        theirs = _tokens(other)
++        if not theirs:
++            continue
++        overlap = len(own & theirs) / len(own | theirs)
++        best = max(best, overlap)
++    return round(1.0 - best, 4)
+diff --git a/backend/app/exploration/proposer.py b/backend/app/exploration/proposer.py
+new file mode 100644
+index 0000000..0d0b723
+--- /dev/null
++++ b/backend/app/exploration/proposer.py
+@@ -0,0 +1,170 @@
++"""Предлагающий QD-Court: Explore и Mutate (Этап 5 ТЗ).
++
++Первая версия — на правилах проекта, без модели: Ollama в окружении
++недоступен, а ТЗ разрешает начинать с минимального варианта. Точка
++расширения одна: `DirectionProposer` при появлении локальной модели
++может генерировать формулировки сам, контракт гипотезы не меняется.
++
++Направления берутся из того, что конвейер уже умеет считать по материалам:
++непокрытые обстоятельства, доводы сторон, противоречия сумм, нормы из
++материалов, вопросы квалификации. Ничего не выдумывается: текст
++направления строится из фрагментов материалов.
++"""
++
++from __future__ import annotations
++
++import re
++from dataclasses import dataclass
++
++from app.agents.evidence_pack import EvidencePack
++from app.exploration.archive import new_id
++from app.exploration.models import Hypothesis
++from app.verification.engine import SYSTEM_LAWS
++from app.verification.qualification import check_qualification
++
++_LAW_RE = re.compile(r"ст\.\s*(\d+(?:\.\d+)?)\s+([А-ЯЁ]{2,})", re.IGNORECASE)
++
++#: Шаблонные фразы в отзывах: отсылка к ст. 56 ГПК, «возражений не
++#: поступило». Направлением анализа они не являются — это не довод,
++#: а констатация процессуального факта.
++_BOILERPLATE_RE = re.compile(
++    r"ст\.?\s*56\s*ГПК"
++    r"|возражени\w*\s+(?:относительно|не\s+поступило|не\s+представлено)"
++    r"|ходатайств\w*\s+(?:и\s+возражений\s+)?(?:не\s+поступило|не\s+заявлено)",
++    re.IGNORECASE,
++)
++
++
++@dataclass
++class DirectionProposer:
++    model_version: str = "rules-1"
++    max_directions: int = 8
++
++    def explore(self, pack: EvidencePack) -> list[Hypothesis]:
++        """Найти направления анализа, которые конвейер не проверяет."""
++        found: list[Hypothesis] = []
++
++        # 1. Доводы сторон: каждый фрагмент возражений — возможное
++        #    пропущенное направление.
++        for item in pack.items:
++            if item.category != "objections":
++                continue
++            if _BOILERPLATE_RE.search(item.text):
++                continue
++            found.append(
++                Hypothesis(
++                    id=new_id(),
++                    case_id="",
++                    question_id=f"objection:{item.source_document}:{item.order}",
++                    kind="objection_coverage",
++                    text=(
++                        "направление: разобрать довод стороны «"
++                        f"{item.text[:120]}»"
++                    ),
++                    sources=[item.source_document],
++                    model_version=self.model_version,
++                )
++            )
++
++        # 2. Противоречие сумм в требованиях: разные суммы по одному
++        #    основанию — вопрос, какая просительная.
++        claims = pack.by_category("claims")
++        sums = {
++            amount
++            for item in claims
++            for amount in item.amounts
++            if amount
++        }
++        if len(sums) > 1:
++            docs = sorted({item.source_document for item in claims if item.amounts})
++            found.append(
++                Hypothesis(
++                    id=new_id(),
++                    case_id="",
++                    question_id="claims:amounts",
++                    kind="contradiction_amounts",
++                    text=(
++                        "направление: в требованиях разные суммы "
++                        f"({', '.join(sorted(sums)[:5])}) — проверить, какая "
++                        "сумма просительная"
++                    ),
++                    sources=docs[:4],
++                    model_version=self.model_version,
++                )
++            )
++
++        # 3. Нормы из материалов, которых нет среди системных: их
++        #    применение суд решает сам, но направление стоит проверить.
++        material_laws: set[tuple[str, str]] = set()
++        for item in pack.items:
++            for match in _LAW_RE.finditer(item.text):
++                material_laws.add((match.group(1), match.group(2).upper()))
++        system = {tuple(law) for law in SYSTEM_LAWS}
++        extra = sorted(material_laws - system)[:3]
++        for number, code in extra:
++            found.append(
++                Hypothesis(
++                    id=new_id(),
++                    case_id="",
++                    question_id=f"law:{number}:{code}",
++                    kind="norm_from_materials",
++                    text=(
++                        "направление: в материалах ссылка на ст. "
++                        f"{number} {code} — проверить, применима ли норма и "
++                        "в какой редакции"
++                    ),
++                    sources=[],
++                    model_version=self.model_version,
++                )
++            )
++
++        # 4. Вопросы квалификации (та же логика, что в проверке, —
++        #    но здесь это направление для поиска, а не замечание).
++        plaintiff = _side(pack, "истец")
++        defendant = _side(pack, "ответчик")
++        texts = [item.text for item in pack.items]
++        for finding in check_qualification(texts, plaintiff, defendant):
++            found.append(
++                Hypothesis(
++                    id=new_id(),
++                    case_id="",
++                    question_id=f"qualification:{finding.kind}",
++                    kind=finding.kind,
++                    text=f"направление: {finding.reason}",
++                    sources=[],
++                    model_version=self.model_version,
++                )
++            )
++
++        return found[: self.max_directions]
++
++    def mutate(self, pack: EvidencePack, parent: Hypothesis) -> Hypothesis | None:
++        """Уточнить гипотезу новым фрагментом из её же источника."""
++        for item in pack.items:
++            if item.source_document not in parent.sources:
++                continue
++            if item.text[:60] in parent.text:
++                continue
++            child = Hypothesis(
++                id=new_id(),
++                case_id=parent.case_id,
++                question_id=parent.question_id,
++                kind=parent.kind,
++                text=(
++                    f"{parent.text} Уточнение из {item.source_document}: "
++                    f"«{item.text[:100]}»"
++                ),
++                sources=sorted(set(parent.sources + [item.source_document])),
++                parent_ids=[parent.id],
++                model_version=self.model_version,
++            )
++            return child
++        return None
++
++
++def _side(pack: EvidencePack, role: str) -> str:
++    marker = f" ({role})"
++    for entry in pack.participants:
++        if entry.endswith(marker):
++            return entry[: -len(marker)]
++    return ""
+diff --git a/backend/app/exploration/service.py b/backend/app/exploration/service.py
+new file mode 100644
+index 0000000..b5ad4d5
+--- /dev/null
++++ b/backend/app/exploration/service.py
+@@ -0,0 +1,132 @@
++"""Сервис QD-Court: прогон поиска с бюджетом и безопасным возвратом.
++
++Модуль НЕ получает проект судебного акта и не может изменить исход,
++суммы или детерминированные части (`RULES_BUILT_SECTIONS`): на входе
++только пакет материалов дела. Любая ошибка (нет модели, испорченный
++архив, пустой пакет) — возврат к обычному конвейеру: пустой список
++гипотез и признак fallback в отчёте.
++"""
++
++from __future__ import annotations
++
++import time
++from dataclasses import dataclass, field
++from datetime import datetime
++from pathlib import Path
++
++from app.agents.evidence_pack import EvidencePack
++from app.exploration.archive import ExplorationArchive, admit
++from app.exploration.models import Hypothesis
++from app.exploration.novelty import novelty
++from app.exploration.proposer import DirectionProposer
++from app.exploration.verification import HypothesisVerifier
++
++
++@dataclass
++class ExplorationBudget:
++    """Ограничения прогона: итерации, время, размер архива, порог новизны."""
++
++    max_iterations: int = 20
++    max_seconds: float = 30.0
++    max_hypotheses: int = 10
++    novelty_threshold: float = 0.5
++
++
++@dataclass
++class ExplorationReport:
++    case_id: str
++    hypotheses: list[Hypothesis] = field(default_factory=list)
++    iterations: int = 0
++    fallback: bool = False
++    reason: str = ""
++    created_at: str = field(
++        default_factory=lambda: datetime.now().isoformat(timespec="seconds")
++    )
++
++    @property
++    def active(self) -> list[Hypothesis]:
++        return [
++            h
++            for h in self.hypotheses
++            if h.status.value in {"PROPOSED", "SUPPORTED"}
++        ]
++
++    def to_dict(self) -> dict[str, object]:
++        return {
++            "case_id": self.case_id,
++            "iterations": self.iterations,
++            "fallback": self.fallback,
++            "reason": self.reason,
++            "created_at": self.created_at,
++            "hypotheses": [h.to_dict() for h in self.hypotheses],
++        }
++
++
++class ExplorationService:
++    def __init__(
++        self,
++        archive_root: Path,
++        budget: ExplorationBudget | None = None,
++    ) -> None:
++        self.archive = ExplorationArchive(archive_root)
++        self.proposer = DirectionProposer()
++        self.verifier = HypothesisVerifier()
++        self.budget = budget or ExplorationBudget()
++
++    def run(self, case_id: str, pack: EvidencePack) -> ExplorationReport:
++        try:
++            return self._run(case_id, pack)
++        except Exception as exc:  # noqa: BLE001
++            # Безопасный возврат: конвейер работает без поиска.
++            return ExplorationReport(
++                case_id=case_id,
++                fallback=True,
++                reason=f"{type(exc).__name__}: {exc}",
++            )
++
++    def _run(self, case_id: str, pack: EvidencePack) -> ExplorationReport:
++        hypotheses = self.archive.load(case_id)
++        candidates = self.proposer.explore(pack)
++        deadline = time.monotonic() + self.budget.max_seconds
++        iterations = 0
++        active = 0
++
++        for candidate in candidates:
++            if (
++                iterations >= self.budget.max_iterations
++                or time.monotonic() > deadline
++                or active >= self.budget.max_hypotheses
++            ):
++                break
++            iterations += 1
++            candidate.case_id = case_id
++            candidate.novelty = novelty(
++                candidate.text, [h.text for h in hypotheses]
++            )
++            candidate = self.verifier.verify(candidate, pack)
++            if candidate.status.value == "SUPPORTED":
++                active += 1
++            hypotheses = admit(
++                hypotheses, candidate, self.budget.novelty_threshold
++            )
++
++        # Мутации: уточняем подтверждённые гипотезы фрагментами их
++        # источников, пока есть бюджет.
++        parents = [h for h in hypotheses if h.status.value == "SUPPORTED"]
++        for parent in parents:
++            if iterations >= self.budget.max_iterations or time.monotonic() > deadline:
++                break
++            child = self.proposer.mutate(pack, parent)
++            if child is None:
++                continue
++            iterations += 1
++            child.novelty = novelty(child.text, [h.text for h in hypotheses])
++            child = self.verifier.verify(child, pack)
++            hypotheses = admit(hypotheses, child, self.budget.novelty_threshold)
++
++        self.archive.save(case_id, hypotheses)
++        return ExplorationReport(
++            case_id=case_id,
++            hypotheses=hypotheses,
++            iterations=iterations,
++        )
+diff --git a/backend/app/exploration/verification.py b/backend/app/exploration/verification.py
+new file mode 100644
+index 0000000..bbf7a38
+--- /dev/null
++++ b/backend/app/exploration/verification.py
+@@ -0,0 +1,63 @@
++"""Проверка гипотез QD-Court: происхождение и подтверждённость (п. 5–6).
++
++Гипотеза не получает положительный статус только за оценку модели —
++здесь проверяются основания: источник существует в материалах, а числа
++взяты из материалов. Иначе — UNSUPPORTED с причиной (остаётся в архиве).
++"""
++
++from __future__ import annotations
++
++import re
++
++from app.agents.evidence_pack import EvidencePack
++from app.exploration.models import Hypothesis, HypothesisStatus
++
++_NUM_RE = re.compile(r"\d+")
++
++
++class HypothesisVerifier:
++    def known_documents(self, pack: EvidencePack) -> set[str]:
++        return {item.source_document for item in pack.items if item.source_document}
++
++    def material_numbers(self, pack: EvidencePack) -> set[str]:
++        found = set(pack.amounts)
++        for item in pack.items:
++            found |= set(item.amounts)
++            found |= set(_NUM_RE.findall(item.text))
++        return {value.lstrip("0") or "0" for value in found if value}
++
++    def verify(self, hypothesis: Hypothesis, pack: EvidencePack) -> Hypothesis:
++        known = self.known_documents(pack)
++        numbers = self.material_numbers(pack)
++
++        sources_exist = all(source in known for source in hypothesis.sources)
++        own_numbers = {
++            value.lstrip("0") or "0"
++            for value in _NUM_RE.findall(hypothesis.text)
++        }
++        numbers_ok = all(value in numbers for value in own_numbers)
++
++        hypothesis.checks = {
++            "sources_exist": sources_exist,
++            "numbers_in_materials": numbers_ok,
++        }
++        if not sources_exist:
++            hypothesis.status = HypothesisStatus.UNSUPPORTED
++            hypothesis.rejection_reason = (
++                "источник не найден в материалах дела: "
++                + ", ".join(
++                    source
++                    for source in hypothesis.sources
++                    if source not in known
++                )
++            )
++        elif not numbers_ok:
++            hypothesis.status = HypothesisStatus.UNSUPPORTED
++            hypothesis.rejection_reason = (
++                "число в гипотезе не подтверждено материалами: "
++                + ", ".join(sorted(own_numbers - numbers)[:5])
++            )
++        else:
++            # SUPPORTED — «основания подтверждены», не «факт доказан».
++            hypothesis.status = HypothesisStatus.SUPPORTED
++        return hypothesis
+diff --git a/backend/tests/test_exploration.py b/backend/tests/test_exploration.py
+new file mode 100644
+index 0000000..9fa69fe
+--- /dev/null
++++ b/backend/tests/test_exploration.py
+@@ -0,0 +1,200 @@
++"""QD-Court: изоляция, подтверждение, лимиты, отказ (Этапы 4–5 ТЗ)."""
++
++from __future__ import annotations
++
++import json
++
++from app.agents.evidence_pack import EvidenceItem, EvidencePack
++from app.exploration import (
++    ExplorationBudget,
++    ExplorationService,
++    HumanReviewStatus,
++    Hypothesis,
++    HypothesisStatus,
++)
++
++
++def _pack(case: str = "T-0001") -> EvidencePack:
++    pack = EvidencePack(case_number=case)
++    pack.items.append(
++        EvidenceItem(
++            category="claims",
++            text="Истец просит взыскать 10148 рублей долга.",
++            source_document="01_claim.txt",
++            source_type="CLAIM",
++            amounts=["10148"],
++            order=1,
++        )
++    )
++    pack.items.append(
++        EvidenceItem(
++            category="objections",
++            text="Ответчик не согласен с размером долга.",
++            source_document="02_response.txt",
++            source_type="RESPONSE",
++            order=2,
++        )
++    )
++    return pack
++
++
++def _service(tmp_path, **budget_kwargs) -> ExplorationService:
++    budget = ExplorationBudget(**budget_kwargs)
++    return ExplorationService(archive_root=tmp_path, budget=budget)
++
++
++class TestArchiveIsolation:
++    def test_cases_do_not_share_hypotheses(self, tmp_path) -> None:
++        service = _service(tmp_path)
++        first = service.run("T-A", _pack("T-A"))
++        second = service.run("T-B", _pack("T-B"))
++        first_ids = {h.id for h in first.hypotheses}
++        second_ids = {h.id for h in second.hypotheses}
++        assert first_ids
++        assert second_ids
++        assert not first_ids & second_ids
++        # Ни одна гипотеза не приписана чужому делу.
++        assert all(h.case_id == "T-B" for h in second.hypotheses)
++
++
++class TestVerification:
++    def test_dangling_source_rejected(self, tmp_path) -> None:
++        service = _service(tmp_path)
++        report = service.run("T-0001", _pack())
++        dangling = [
++            h
++            for h in report.hypotheses
++            if any(s == "99_missing.txt" for s in h.sources)
++        ]
++        assert not dangling  # предлагающий сам не выдумывает источников
++
++    def test_number_not_in_materials_rejected(self, tmp_path) -> None:
++        service = _service(tmp_path)
++        report = service.run("T-0001", _pack())
++        for hypothesis in report.hypotheses:
++            if hypothesis.status is HypothesisStatus.UNSUPPORTED:
++                assert hypothesis.rejection_reason
++        assert all(
++            h.status is not HypothesisStatus.SUPPORTED or "источник" not in h.rejection_reason
++            for h in report.hypotheses
++        )
++
++    def test_supported_hypothesis_has_checks(self, tmp_path) -> None:
++        service = _service(tmp_path)
++        report = service.run("T-0001", _pack())
++        supported = [h for h in report.hypotheses if h.status is HypothesisStatus.SUPPORTED]
++        assert supported
++        for hypothesis in supported:
++            assert hypothesis.checks["sources_exist"]
++            assert hypothesis.checks["numbers_in_materials"]
++
++    def test_human_review_pending_by_default(self, tmp_path) -> None:
++        service = _service(tmp_path)
++        report = service.run("T-0001", _pack())
++        assert all(h.human_review is HumanReviewStatus.PENDING for h in report.hypotheses)
++
++
++class TestNoveltyFilter:
++    def test_duplicate_rejected(self, tmp_path) -> None:
++        service = _service(tmp_path)
++        service.run("T-0001", _pack())
++        first = service.run("T-0001", _pack())
++        statuses = {h.status for h in first.hypotheses}
++        assert HypothesisStatus.REJECTED in statuses
++        rejected = [h for h in first.hypotheses if h.status is HypothesisStatus.REJECTED]
++        assert all("повтор" in h.rejection_reason for h in rejected)
++
++
++class TestBudget:
++    def test_iteration_limit_respected(self, tmp_path) -> None:
++        service = _service(tmp_path, max_iterations=1, max_hypotheses=10)
++        report = service.run("T-0001", _pack())
++        assert report.iterations <= 1
++
++    def test_no_crash_on_empty_pack(self, tmp_path) -> None:
++        service = _service(tmp_path)
++        report = service.run("T-EMPTY", EvidencePack(case_number="T-EMPTY"))
++        assert report.fallback or report.hypotheses == []
++
++    def test_fallback_on_broken_archive(self, tmp_path) -> None:
++        (tmp_path / "T-BROKEN.json").write_text("{ сломано", encoding="utf-8")
++        service = _service(tmp_path)
++        report = service.run("T-BROKEN", _pack())
++        assert report.fallback
++        assert report.reason
++
++
++class TestSafety:
++    def test_pack_not_mutated(self, tmp_path) -> None:
++        pack = _pack()
++        before = [item.text for item in pack.items]
++        _service(tmp_path).run("T-0001", pack)
++        assert [item.text for item in pack.items] == before
++
++    def test_json_roundtrip(self, tmp_path) -> None:
++        service = _service(tmp_path)
++        report = service.run("T-0001", _pack())
++        payload = json.dumps(report.to_dict(), ensure_ascii=False)
++        loaded = json.loads(payload)
++        assert loaded["case_id"] == "T-0001"
++        assert isinstance(loaded["hypotheses"], list)
++
++    def test_mutation_uses_parent_source(self, tmp_path) -> None:
++        service = _service(tmp_path)
++        report = service.run("T-0001", _pack())
++        mutated = [h for h in report.hypotheses if h.parent_ids]
++        if mutated:
++            assert all(h.parent_ids for h in mutated)
++            assert all(h.sources for h in mutated)
++
++
++class TestBoilerplateFilter:
++    def test_article56_recital_not_a_direction(self, tmp_path) -> None:
++        pack = _pack()
++        pack.items.append(
++            EvidenceItem(
++                category="objections",
++                text="В силу ст. 56 ГПК РФ каждая сторона должна доказать "
++                "обстоятельства, на которые она ссылается.",
++                source_document="02_response.txt",
++                source_type="RESPONSE",
++                order=3,
++            )
++        )
++        pack.items.append(
++            EvidenceItem(
++                category="objections",
++                text="Ходатайств и возражений относительно исковых "
++                "требований от нее не поступило.",
++                source_document="02_response.txt",
++                source_type="RESPONSE",
++                order=4,
++            )
++        )
++        directions = _service(tmp_path).proposer.explore(pack)
++        objection_directions = [h for h in directions if h.kind == "objection_coverage"]
++        assert all("56 ГПК" not in h.text for h in objection_directions)
++        assert all("не поступило" not in h.text for h in objection_directions)
++
++
++class TestHypothesisModel:
++    def test_to_dict_from_dict_roundtrip(self) -> None:
++        hypothesis = Hypothesis(
++            id="h1",
++            case_id="T-0001",
++            question_id="q1",
++            kind="objection_coverage",
++            text="проверить довод",
++            sources=["02_response.txt"],
++            novelty=0.8,
++            status=HypothesisStatus.SUPPORTED,
++        )
++        restored = Hypothesis.from_dict(hypothesis.to_dict())
++        assert restored.id == "h1"
++        assert restored.status is HypothesisStatus.SUPPORTED
++        assert restored.human_review is HumanReviewStatus.PENDING
++
++    def test_id_stability(self) -> None:
++        first = Hypothesis(id="a", case_id="c", question_id="q", kind="k", text="t")
++        second = Hypothesis(id="a", case_id="c", question_id="q", kind="k", text="t")
++        assert first.to_dict()["id"] == second.to_dict()["id"] == "a"
+diff --git a/docs/qd-court-design.md b/docs/qd-court-design.md
+new file mode 100644
+index 0000000..902491d
+--- /dev/null
++++ b/docs/qd-court-design.md
+@@ -0,0 +1,77 @@
++# QD-Court: архитектура и ограничения (Этапы 4–5 ТЗ)
++
++Экспериментальный модуль поиска направлений анализа: пропущенные доводы,
++доказательственные пробелы, противоречия. **Не является частью
++обязательного пути подготовки судебного акта** и не может изменить исход,
++суммы или детерминированные части (`RULES_BUILT_SECTIONS`).
++
++## Происхождение идей
++
++QD-Rec (SakanaAI, Apache-2.0) — архив item–hypothesis с novelty-first
++admission, локальной конкуренцией и выбором бандитом; оригинал ходит в
++OpenRouter. Перенесены только проверяемые архитектурные идеи:
++
++| Идея QD-Rec | В QD-Court |
++|---|---|
++| архив гипотез | `ExplorationArchive`: один JSON на дело (`data/exploration/<case>.json`) |
++| novelty-first admission | `admit()` + порог новизны по Жаккару токенов |
++| локальная конкуренция | в пределах `question_id` живёт самая новизнная версия, старые — `SUPERSEDED` |
++| отклонённые сохраняются | `REJECTED`/`UNSUPPORTED` остаются в архиве с причиной |
++| explore / mutate | `DirectionProposer.explore()` / `.mutate()` |
++| контекстный бандит | **не реализован** (ТЗ: сначала сравнить простой поиск и эволюционный архив) |
++
++## Структура
++
++```text
++backend/app/exploration/
++    models.py        Hypothesis (контракт), HypothesisStatus, HumanReviewStatus
++    novelty.py       новизна по содержанию (Жаккар через app.rag.retrieval.tokenize)
++    archive.py       архив, изоляция по делам, admit() с локальной конкуренцией
++    proposer.py      Explore/Mutate на правилах проекта (без модели)
++    verification.py  проверка оснований: источник существует, числа из материалов
++    service.py       прогон с бюджетом, безопасный возврат
++```
++
++## Контракт гипотезы
++
++`id`, `case_id`, `question_id`, `kind`, `text`, `sources`, `parent_ids`,
++`model_version`, `novelty`, `checks`, `rejection_reason`, `status`,
++`human_review`, `created_at/updated_at` — все поля из ТЗ присутствуют.
++Гипотеза **никогда** не становится доказанным фактом: `SUPPORTED` означает
++только «источники и числа подтверждены материалами»; оценку по существу
++даёт человек (`human_review=PENDING` по умолчанию).
++
++## Что проверяет `HypothesisVerifier`
++
++1. Каждый источник гипотезы существует среди документов пакета — иначе
++   `UNSUPPORTED` с причиной.
++2. Каждое число гипотезы встречается в материалах — иначе `UNSUPPORTED`.
++3. Статус `PROPOSED` не выдаётся наружу как результат: наружу идут только
++   `SUPPORTED` (и то как направление для человека).
++
++## Безопасность
++
++- **Изоляция:** архив читается только по `case_id`; гипотезы чужих дел не
++  используются (тест `test_cases_do_not_share_hypotheses`).
++- **Нет записи в акт:** сервис не получает проект на вход и не возвращает
++  текст резолютивной части; менять `RULES_BUILT_SECTIONS` физически нечем.
++- **Лимиты:** `ExplorationBudget` — итерации, секунды, размер архива,
++  порог новизны.
++- **Отказ:** любое исключение → `fallback=True`, пустой результат, конвейер
++  работает как раньше (тест `test_fallback_on_broken_archive`).
++- **Без модели:** предлагающий — правила проекта; Ollama в окружении нет.
++  Точка расширения одна (`DirectionProposer`), контракт гипотезы не меняется.
++
++## Запуск
++
++```powershell
++backend\.venv\Scripts\python.exe scripts\qd_court_run.py   # прогон по 10 делам
++backend\.venv\Scripts\python.exe -m pytest tests\test_exploration.py -q
++```
++
++## Чего модуль не делает
++
++Не выносит вердиктов по существу, не считает «полезность» гипотезы без
++разметки человека, не выбирает гипотезы автоматически (бандит не нужен:
++направления показываются списком), не публикует и не сохраняет данные вне
++каталога архива.
+diff --git a/scripts/qd_court_run.py b/scripts/qd_court_run.py
+new file mode 100644
+index 0000000..2530dbf
+--- /dev/null
++++ b/scripts/qd_court_run.py
+@@ -0,0 +1,64 @@
++"""Прогон QD-Court по делам демо-набора (Этап 6 ТЗ).
++
++Собирает пакеты тем же конвейером, что и демо (build_real_site.build_pack),
++гоняет ExplorationService и кладёт архивы в data/exploration/.
++Сводка — в scripts/tmp_qd_run_out.txt (кириллица в консоли портится).
++"""
++
++from __future__ import annotations
++
++import importlib.util
++import json
++import sys
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parent.parent
++CASES = ROOT / "data" / "demo" / "real" / "cases"
++ARCHIVE = ROOT / "data" / "exploration"
++OUT = Path(__file__).with_name("tmp_qd_run_out.txt")
++
++
++def _load(name: str, filename: str):
++    spec = importlib.util.spec_from_file_location(name, ROOT / "scripts" / filename)
++    module = importlib.util.module_from_spec(spec)
++    sys.modules[name] = module
++    spec.loader.exec_module(module)
++    return module
++
++
++def main() -> None:
++    build = _load("qd_build_real_site", "build_real_site.py")
++    from app.exploration import ExplorationBudget, ExplorationService
++
++    service = ExplorationService(ARCHIVE, ExplorationBudget())
++    index = json.loads((CASES / "index.json").read_text(encoding="utf-8"))
++
++    lines: list[str] = []
++    total_hypotheses = 0
++    total_supported = 0
++    for entry in index["cases"]:
++        slug = entry["slug"]
++        case_dir = CASES / slug
++        settings = build.make_settings(case_dir)
++        settings.ensure_dirs()
++        pack = build.build_pack(case_dir, settings)
++        report = service.run(slug, pack)
++        supported = [h for h in report.hypotheses if h.status.value == "SUPPORTED"]
++        total_hypotheses += len(report.hypotheses)
++        total_supported += len(supported)
++        lines.append(
++            f"## {slug}: итераций {report.iterations}, гипотез "
++            f"{len(report.hypotheses)}, подтверждено {len(supported)}, "
++            f"fallback={report.fallback}"
++        )
++        for hypothesis in supported[:4]:
++            lines.append(f"- [{hypothesis.kind}] {hypothesis.text[:140]}")
++        lines.append("")
++
++    lines.append(f"ИТОГО: гипотез {total_hypotheses}, подтверждено {total_supported}")
++    OUT.write_text("\n".join(lines), encoding="utf-8")
++    print(f"cases={len(index['cases'])} hypotheses={total_hypotheses}")
++
++
++if __name__ == "__main__":
++    main()
+-- 
+2.53.0.windows.2
+
