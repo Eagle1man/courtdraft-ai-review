@@ -93,11 +93,35 @@ def subject_of(text: str) -> str:
 
 
 def court_of(text: str) -> str:
-    match = re.search(r"(Мировой судья[^,.\n]{0,70})", text)
+    # Обрезка шла по первой точке, и инициал судьи резал фамилию:
+    # «Синяева И.О.» превращалось в «Синяева И», фамилия уходила в
+    # манифест мимо find_leaks. Запятая и перевод строки — границы
+    # предложения, точка внутри инициалов — нет. Лимит шире старого
+    # (70) — на реальных делах он рвал строку посередине фамилии.
+    match = re.search(r"(Мировой судья[^,\n]{0,120})", text)
     if match:
+        # Лимит отрезал слово посередине: дальше недописанное слово,
+        # которое может оказаться фамилией судьи. Проверить его нельзя —
+        # «области Чер» неотличимо от настоящего текста. Неполную строку
+        # судью называть нельзя, чем оставлять обрубок.
+        if match.end() < len(text) and re.match(r"[А-ЯЁа-яё]", text[match.end()]):
+            return "Суд (обезличено)"
         court = base.anonymize(match.group(1)).strip()
         return re.sub(r"\s+", " ", court)
     return "Суд (обезличено)"
+
+
+def safe_court(text: str) -> str:
+    """Поле court обязательно проходит проверку на персональные данные.
+
+    Раньше find_leaks применялся только к частям решения, а манифест
+    с судьёй писался мимо проверки — рецензент поймал фамилию судьи в
+    опубликованном деле. Не прошло проверку — судья не называется.
+    """
+    court = court_of(text)
+    if base.find_leaks(court):
+        return "Суд (обезличено)"
+    return court
 
 
 def pick_cases(documents: list[str], count: int) -> list[tuple[int, str]]:
@@ -244,7 +268,7 @@ def main(argv: list[str] | None = None) -> int:
             continue
 
         slug = f"real-{number:02d}"
-        written = write_case(slug, cleaned, court_of(raw))
+        written = write_case(slug, cleaned, safe_court(raw))
         manifest = written["manifest"]
         cases.append(
             {
