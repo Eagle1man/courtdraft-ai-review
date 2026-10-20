@@ -1,0 +1,673 @@
+From be65af63eb3e386231ce224513b4e05b486fafa1 Mon Sep 17 00:00:00 2001
+From: Eagle1man <orel198611@gmail.com>
+Date: Tue, 20 Oct 2026 19:43:44 +0300
+Subject: [PATCH 19/20] =?UTF-8?q?=D0=9E=D1=86=D0=B5=D0=BD=D0=BE=D1=87?=
+ =?UTF-8?q?=D0=BD=D1=8B=D0=B9=20harness=20=D0=B4=D0=BB=D1=8F=20=D1=8E?=
+ =?UTF-8?q?=D1=80=D0=B8=D1=81=D1=82=D0=B0=20-=20=D0=BF.=2078=20=D1=80?=
+ =?UTF-8?q?=D0=B0=D0=B7=D0=B1=D0=BE=D1=80=D0=B0=20=D1=80=D0=B5=D1=86=D0=B5?=
+ =?UTF-8?q?=D0=BD=D0=B7=D0=B5=D0=BD=D1=82=D0=B0?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+scripts/eval_harness.py собирает ведомость по делам с известным итогом: три графы (исход, суммы, нормы) - как их увидели правила и как записал суд, - и пустые графы для оценщика. Вердикт не автоматизируется: 'число на число' и разность множеств статей - механика, решение за юристом. Модель не вызывается, конвейер правил (build_real_site.process) - выборка в 30 дел считается за секунды.\\nМаркеры исхода - корни слов в обеих резолютивных, неразобранное показывается как «не разобрано», а не угадывается. Рублёвые суммы суда - с контекстом и без роли: роль каждой суммы читает человек.\\nВыход data/eval/ в git не входит (фрагменты материалов, та же лицензия корпуса, что у data/demo/real/), повторный запуск незаполненную ведомость не затирает (--force).\\n21 тест: маркеры исхода, статьи (двоеточия, диапазоны, КоАП), суммы с копейками («11551,84 руб.» даёт 11551, а не 1155184), склейка ведомости. docs/evaluation.md - как запускать и как читать ограничения граф; README - строка в таблицу документации.
+---
+ .gitignore                         |   4 +
+ README.md                          |   1 +
+ backend/tests/test_eval_harness.py | 199 +++++++++++++++++
+ docs/evaluation.md                 |  62 ++++++
+ scripts/eval_harness.py            | 340 +++++++++++++++++++++++++++++
+ 5 files changed, 606 insertions(+)
+ create mode 100644 backend/tests/test_eval_harness.py
+ create mode 100644 docs/evaluation.md
+ create mode 100644 scripts/eval_harness.py
+
+diff --git a/.gitignore b/.gitignore
+index 4086982..efc2b08 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -93,6 +93,10 @@ data/demo/real/
+ # поэтому в репозиторий оно не попадает.
+ data/demo/real/
+ 
++# Оценочная ведомость юриста (scripts/eval_harness.py): содержит фрагменты
++# материалов и решений дела — по тем же правилам, что и data/demo/real/.
++data/eval/
++
+ # Обучающая выборка, собранная из решений корпуса. Файлы производные
+ # от реальных решений, поэтому под тем же правилом: в репозиторий не
+ # попадают. Сама выборка и отчёт о её составе остаются на машине.
+diff --git a/README.md b/README.md
+index 0cfad45..f40f0ba 100644
+--- a/README.md
++++ b/README.md
+@@ -670,6 +670,7 @@ cd backend
+ | [`docs/api.md`](docs/api.md) | Описание API |
+ | [`SECURITY.md`](SECURITY.md) | Безопасность и известные ограничения |
+ | [`docs/legal-regime.md`](docs/legal-regime.md) | Правовой режим данных: история версий, тайна совещания, Указ № 490 |
++| [`docs/evaluation.md`](docs/evaluation.md) | Оценка качества на делах с известным итогом: ведомость для юриста |
+ | [`CONTRIBUTING.md`](CONTRIBUTING.md) | Как участвовать |
+ | [`docs/deployment-rtx3050.md`](docs/deployment-rtx3050.md) | Развёртывание на RTX 3050 |
+ 
+diff --git a/backend/tests/test_eval_harness.py b/backend/tests/test_eval_harness.py
+new file mode 100644
+index 0000000..55547e0
+--- /dev/null
++++ b/backend/tests/test_eval_harness.py
+@@ -0,0 +1,199 @@
++"""Оценочная ведомость для юриста (п. 78 разбора рецензента).
++
++Harness собирает три графы — исход, суммы, нормы, — и не оценивает сам.
++Тесты держат именно механику: грубые маркеры исхода, извлечение статей,
++рублёвых сумм и склейку ведомости. Скрипт лежит вне backend/, поэтому
++грузится через importlib — как его грузит build_real_cases.
++"""
++
++from __future__ import annotations
++
++import importlib.util
++import sys
++from pathlib import Path
++from typing import Any
++
++ROOT = Path(__file__).resolve().parents[2]
++
++
++def _load(name: str, filename: str) -> Any:
++    spec = importlib.util.spec_from_file_location(name, ROOT / "scripts" / filename)
++    if spec is None or spec.loader is None:
++        raise RuntimeError(f"не найден скрипт {filename}")
++    module = importlib.util.module_from_spec(spec)
++    sys.modules[name] = module
++    spec.loader.exec_module(module)
++    return module
++
++
++harness = _load("eval_harness", "eval_harness.py")
++
++
++class TestOutcomeMarkers:
++    """Маркеры исхода — корни слов, а не точные фразы."""
++
++    def test_partial_satisfaction(self) -> None:
++        text = "Удовлетворить исковые требования истца частично, в остальной части отказать."
++        found = harness.outcome_of(text)
++        assert "частичное удовлетворение" in found
++        assert "отказ (в части требований)" in found
++
++    def test_full_satisfaction(self) -> None:
++        assert "полное удовлетворение" in harness.outcome_of(
++            "Исковые требования истца удовлетворить в полном объёме."
++        )
++
++    def test_denial(self) -> None:
++        assert "отказ в иске" in harness.outcome_of(
++            "В удовлетворении исковых требований оставить без удовлетворения."
++        )
++
++    def test_unparsed_is_empty(self) -> None:
++        # Неготовный текст не получает маркеров — в ведомости это
++        # показывается как «не разобрано», а не подменяется угаданным.
++        assert harness.outcome_of("ТРЕБУЕТ ПРОВЕРКИ СПЕЦИАЛИСТОМ") == []
++
++
++class TestLaws:
++    """Статьи: «ст. 98 ГПК РФ», «ст.333.19 НК РФ», «ч. 1 ст. 320-322 ГПК РФ»."""
++
++    def test_basic_extraction(self) -> None:
++        laws = harness.laws_in("на основании ст. 98 ГПК РФ взыскать расходы")
++        assert "98 ГПК РФ" in laws
++
++    def test_dotted_number_and_mixed_case_code(self) -> None:
++        laws = harness.laws_in("штраф по ст. 333.19 НК РФ и ст. 12.15 КоАП РФ")
++        assert "333.19 НК РФ" in laws
++        assert "12.15 КОАП РФ" in laws
++
++    def test_leading_part_and_range(self) -> None:
++        laws = harness.laws_in("ч. 1 ст. 320-322 ГПК РФ не применяется")
++        assert "320-322 ГПК РФ" in laws
++
++    def test_duplicate_mentions_collapse(self) -> None:
++        laws = harness.laws_in("ст. 98 ГПК РФ, а также ст. 98 ГПК РФ")
++        assert list(laws.values()).count("ст. 98 ГПК РФ") == 1
++
++    def test_diff_three_sets(self) -> None:
++        system = harness.laws_in("ст. 98 ГПК РФ, ст. 103 ГПК РФ")
++        court = harness.laws_in("ст. 98 ГПК РФ, ст. 198 ГПК РФ")
++        diff = harness.laws_diff(system, court)
++        assert diff["both"] == ["ст. 98 ГПК РФ"]
++        assert diff["system_only"] == ["ст. 103 ГПК РФ"]
++        assert diff["court_only"] == ["ст. 198 ГПК РФ"]
++
++
++class TestRubAmounts:
++    """Рублёвые суммы: целая часть, копейки — только в контексте."""
++
++    def test_spaced_thousands(self) -> None:
++        amounts = harness.rub_amounts("взыскать 11 551 руб. с ответчика")
++        assert amounts and amounts[0][0] == 11551
++
++    def test_decimal_keeps_integer_part(self) -> None:
++        # «11551,84 руб.» раньше давало 1155184 — вся строка цифр
++        # склеивалась вместе с копейками.
++        amounts = harness.rub_amounts("взыскать 11551,84 руб.")
++        assert amounts and amounts[0][0] == 11551
++
++    def test_kopecks_not_counted_as_rubles(self) -> None:
++        amounts = harness.rub_amounts("739 рублей 60 копеек")
++        assert [value for value, _context in amounts] == [739]
++
++    def test_context_is_attached(self) -> None:
++        amounts = harness.rub_amounts("госпошлину в размере 444 руб. уплачен")
++        assert amounts and "444" in amounts[0][1]
++
++
++class TestFoundIn:
++    def test_exact_and_rounding(self) -> None:
++        court = [(11551, "…11 551 руб…")]
++        assert harness.found_in(11551.0, court)
++        assert harness.found_in(11551.84, court)  # копейки — в пределах 1 руб.
++
++    def test_missing(self) -> None:
++        assert not harness.found_in(11551.0, [(472, "…472 рубля…")])
++
++
++def _processed() -> dict[str, Any]:
++    """Срез, который process() реально отдаёт (см. build_real_site)."""
++    return {
++        "rules": {
++            "claims": [
++                {
++                    "amount": 11107.0,
++                    "basis": "задолженность по договору",
++                    "source": "01_claim.txt",
++                }
++            ],
++            "fee_paid": 444,
++            "total": 11107.0,
++            "total_with_fee": 11551.0,
++        },
++        "operative_text": (
++            "Удовлетворить исковые требования истца в полном объёме. "
++            "Взыскать 11 551 руб., в том числе 444 руб. госпошлины."
++        ),
++        "verification": {
++            "status": "REVIEW_REQUIRED",
++            "issues": [
++                {
++                    "type": "MONEY_MISMATCH",
++                    "severity": "significant",
++                    "reason": "сумма в резолютивной не совпала с требованием",
++                    "section": "operative",
++                }
++            ],
++            "unsupported_claims": 1,
++        },
++    }
++
++
++class TestCaseBlock:
++    MANIFEST = {
++        "category": "взыскание долга",
++        "claim_amount": 11107.0,
++        "documents": [{"filename": "01_claim.txt"}],
++    }
++    COURT = (
++        "Удовлетворить исковые требования частично. Взыскать 472 рубля. "
++        "В остальной части отказать. На основании ст. 98 ГПК РФ."
++    )
++
++    def _block(self) -> str:
++        return harness.case_block("real-01", self.MANIFEST, _processed(), self.COURT)
++
++    def test_two_sides_of_outcome(self) -> None:
++        block = self._block()
++        assert "система: полное удовлетворение" in block
++        assert "суд: частичное удовлетворение" in block
++
++    def test_amounts_and_number_check(self) -> None:
++        block = self._block()
++        assert "итог 11107.00 руб. (с пошлиной 11551.00 руб.)" in block
++        assert "472 руб." in block  # сумма суда с контекстом
++        # Итога 11551 среди сумм суда (472) нет — это факт, не оценка.
++        assert "не найден" in block
++
++    def test_law_asymmetry_visible(self) -> None:
++        block = self._block()
++        assert "только у суда: ст. 98 ГПК РФ" in block
++
++    def test_verification_summary_present(self) -> None:
++        block = self._block()
++        assert "REVIEW_REQUIRED" in block
++        assert "утверждений без источника: 1" in block
++
++    def test_verdict_fields_empty(self) -> None:
++        # Ведомость ничего не заключает за оценщика.
++        block = self._block()
++        assert block.count("- [ ]") >= 9
++        assert "### Вывод оценщика" in block
++
++    def test_needs_review_note_when_unparsed(self) -> None:
++        processed = _processed()
++        processed["operative_text"] = "ТРЕБУЕТ ПРОВЕРКИ СПЕЦИАЛИСТОМ: иск не разобран."
++        block = harness.case_block(
++            "real-02", self.MANIFEST, processed, "удовлетворить частично."
++        )
++        assert "не разобрано (пометка о неготовности)" in block
+diff --git a/docs/evaluation.md b/docs/evaluation.md
+new file mode 100644
+index 0000000..002d8b9
+--- /dev/null
++++ b/docs/evaluation.md
+@@ -0,0 +1,62 @@
++# Оценка качества на делах с известным итогом (п. 78 разбора рецензента)
++
++Рецензент: «Оценка качества на 20–30 делах с известным итогом: совпал ли
++исход, суммы, применённые нормы. Целесообразно привлечь практикующих
++юристов или студентов магистратуры под руководством преподавателя».
++
++Ответ — оценочная ведомость, которую собирает `scripts/eval_harness.py`.
++Ключевое ограничение: **система сама себя не оценивает.** Скрипт кладёт
++рядом три факта — как их увидели правила и как их записал суд, — а
++решение «совпало / не совпало» ставит человек в графе «Вывод оценщика».
++
++## Как запустить
++
++```powershell
++# 1. Собрать дела (если дел меньше нужных; корпус решений с диска)
++backend\.venv\Scripts\python.exe scripts\build_real_cases.py --count 30
++
++# 2. Собрать ведомость (конвейер правил, без модели — секунды)
++backend\.venv\Scripts\python.exe scripts\eval_harness.py
++
++# Результат: data\eval\eval_worksheet.md  (в git не входит)
++# Повторный запуск незаполненную ведомость не затирает: --force
++```
++
++«Известный итог» в делах корпуса — это `court_decision_reference.txt`
++(резолютивная часть суда, в материалы дела она не входит). Дела без неё в
++ведомость не попадают — сравнивать не с чем.
++
++## Три графы и как их читать
++
++| Графа | Что считает скрипт | Что решает человек |
++|---|---|---|
++| Исход | грубые маркеры по корням слов в обеих резолютивных («частичн», «полном объёме», «без удовлетворени») | совпал ли исход; при «не разобрано» — читать решение целиком |
++| Суммы | итог системы и **все** рублёвые суммы решения суда с контекстом; факт «число найдено среди сумм суда» | верна ли сумма; роль каждой суммы суда (пошлина, ущерб, итог) определяет человек |
++| Нормы | статьи с каждой стороны и разность множеств | верен ли состав норм |
++
++Честные ограничения граф — их видно в самой ведомости, а не спрятаны:
++
++- **Нормы сверяются только с резолютивной частью суда.** В мотивировочной
++  перечень норм шире, поэтому строка «только у системы» часто означает
++  «в мотивировочной это есть», а не ошибку.
++- **«Число на число» — механика, не оценка.** Совпадение суммы не
++  доказывает правильного исхода, несовпадение — ещё не ошибку: суд может
++  снизить обоснованную сумму по ст. 333 ГК РФ.
++- **Маркеры исхода грубые.** Суд пишет «удовлетворить частично, в остальной
++  части отказать» — скрипт показывает оба маркера и не выбирает главный.
++- Спорные дела (спор о факте, нужна оценка эксперта, счёт из скана) так и
++  остаются спорными: ведомость их помечает, а не разрешает.
++
++## Кто заполняет
++
++Юрист или студент магистратуры: на каждое дело — три галочки и обязательный
++«Вывод оценщика» (ФИО, роль, дата, свободный текст). Без вывода дело не
++считается оценённым. Заполненная ведомость — материал для отчёта, она не
++является юридическим заключением.
++
++## Чего harness не делает
++
++- не выносит вердикт «система права/не права» и не считает точность;
++- не запускает модель: только правила (`build_real_site.process`),
++  поэтому выборка в 30 дел считается за секунды и не тратит токены;
++- не оценивает правильность позиции сторон — это компетенция оценщика.
+diff --git a/scripts/eval_harness.py b/scripts/eval_harness.py
+new file mode 100644
+index 0000000..eb6ce88
+--- /dev/null
++++ b/scripts/eval_harness.py
+@@ -0,0 +1,340 @@
++"""Оценочная ведомость для юриста (п. 78 разбора рецензента).
++
++Рецензент: «Оценка качества на 20–30 делах с известным итогом: совпал ли
++исход, суммы, применённые нормы. Целесообразно привлечь практикующих
++юристов или студентов магистратуры под руководством преподавателя».
++
++Система сама себя не оценивает. Скрипт собирает ведомость, где рядом
++лежат три факта — как их увидела система и как их записал суд, — и
++пустые графы для человека. «Совпало / не совпало» определяет оценщик:
++совпадение суммы не доказывает правильного исхода, а его несовпадение
++— ещё не ошибка (суд может отказать в обоснованной части).
++
++Что скрипт считает сам:
++
++- исход — маркеры по корням в обеих резолютивных («частичн», «полном
++  объёме», «без удовлетворени», «отказать»). Грубая разметка для сверки,
++  а не вывод о правоте сторон; неразобранное так и показывается;
++- суммы: итог системы и все рублёвые суммы решения суда с контекстом,
++  плюс чистое число-на-число «итог найден среди сумм суда»;
++- нормы: статьи с каждой стороны и разность множеств;
++- замечания проверки — справочно, чтобы оценщик видел, что система
++  сама отметила неготовность.
++
++Модель не вызывается: конвейер правил, тот же, что в
++scripts/build_real_site.py, — десять дел гоняются за секунды.
++
++Запуск:
++    backend/.venv/Scripts/python.exe scripts/eval_harness.py
++    ... --force            перезаписать незаполненную ведомость
++    ... --out <путь>       куда писать
++Больше дел: scripts/build_real_cases.py --count 30 (корпус с диска).
++Выход по умолчанию: data/eval/eval_worksheet.md — в git не входит.
++"""
++
++from __future__ import annotations
++
++import argparse
++import asyncio
++import importlib.util
++import json
++import re
++import sys
++from datetime import datetime
++from pathlib import Path
++from typing import Any
++
++ROOT = Path(__file__).resolve().parent.parent
++DEFAULT_OUT = ROOT / "data" / "eval" / "eval_worksheet.md"
++
++#: Маркеры исхода: корень — первое, второе — как показывать в ведомости.
++#: Корни, а не точные фразы: падежи и порядок слов в решениях разъезжаются.
++OUTCOME_MARKERS: tuple[tuple[str, str], ...] = (
++    ("частичн", "частичное удовлетворение"),
++    ("в полном объёме", "полное удовлетворение"),
++    ("полностью", "полное удовлетворение"),
++    ("без удовлетворени", "отказ в иске"),
++    ("отказать", "отказ (в части требований)"),
++    ("признать", "признание требования"),
++    ("обязать", "обязательство для стороны"),
++)
++
++#: «ст. 98 ГПК РФ», «ст.333.19 НК РФ», «ч. 1 ст. 320-322 ГПК РФ».
++LAW_RE = re.compile(
++    r"ст\.\s*(\d+(?:\.\d+)*(?:\s*[-–]\s*\d+)*)\s+"
++    r"([А-ЯЁ][А-ЯЁа-яё]{1,}(?:\s+[А-ЯЁ][А-ЯЁа-яё]{1,})?)"
++)
++
++#: Рублёвые суммы: «11 551 руб.», «472 рубля», «11551,84 руб.».
++#: Копейки после запятой в значение не входят — считается целая часть,
++#: копейки видны в контексте. Иначе «11551,84» давало бы 1155184.
++RUB_RE = re.compile(r"(\d[\d\s ]{0,20}[.,]?\d{0,2})\s*(?:рубл\w*|руб\.?)", re.I)
++
++NEEDS_REVIEW = "ТРЕБУЕТ ПРОВЕРКИ СПЕЦИАЛИСТОМ"
++
++
++def _load(name: str, filename: str) -> Any:
++    spec = importlib.util.spec_from_file_location(name, ROOT / "scripts" / filename)
++    if spec is None or spec.loader is None:
++        raise RuntimeError(f"не найден скрипт {filename}")
++    module = importlib.util.module_from_spec(spec)
++    sys.modules[name] = module
++    spec.loader.exec_module(module)
++    return module
++
++
++def outcome_of(text: str) -> list[str]:
++    """Какие маркеры исхода нашлись в резолютивной части."""
++    lowered = text.lower()
++    found: list[str] = []
++    for root, label in OUTCOME_MARKERS:
++        if root in lowered and label not in found:
++            found.append(label)
++    return found
++
++
++def laws_in(text: str) -> dict[str, str]:
++    """Статьи, упомянутые в тексте: ключ вида «98 ГПК РФ» -> как в тексте."""
++    laws: dict[str, str] = {}
++    for match in LAW_RE.finditer(text):
++        number = re.sub(r"\s+", "", match.group(1))
++        code = re.sub(r"\s+", " ", match.group(2).strip())
++        key = f"{number} {code}".upper()
++        laws.setdefault(key, f"ст. {number} {code}")
++    return laws
++
++
++def laws_diff(system: dict[str, str], court: dict[str, str]) -> dict[str, list[str]]:
++    """Разность множеств статей: общие, только у системы, только у суда."""
++    return {
++        "both": sorted(system[key] for key in system.keys() & court.keys()),
++        "system_only": sorted(system[key] for key in system.keys() - court.keys()),
++        "court_only": sorted(court[key] for key in court.keys() - system.keys()),
++    }
++
++
++def rub_amounts(text: str) -> list[tuple[int, str]]:
++    """Все рублёвые суммы с куском текста вокруг — для сверки человеком.
++
++    Роль суммы (пошлина, ущерб, итог) скрипт не определяет: в чужом
++    решении это можно только угадать, а угаданное в ведомости обманет
++    оценщика. Роль читается по контексту.
++    """
++    amounts: list[tuple[int, str]] = []
++    for match in RUB_RE.finditer(text):
++        integer = re.split(r"[.,]", match.group(1), maxsplit=1)[0]
++        digits = re.sub(r"[^\d]", "", integer)
++        if not digits:
++            continue
++        context = re.sub(r"\s+", " ", text[max(0, match.start() - 40) : match.end() + 24])
++        amounts.append((int(digits), context.strip()))
++    return amounts
++
++
++def found_in(value: float, amounts: list[tuple[int, str]]) -> bool:
++    """Есть ли точное число среди сумм решения суда (число на число)."""
++    target = int(round(value))
++    return any(abs(amount - target) <= 1 for amount, _context in amounts)
++
++
++def _checkbox_lines(options: tuple[str, ...]) -> list[str]:
++    """Галочки отдельными строками: в Markdown подпункт списка рендерится,
++    а те же галочки на одной строке — просто текст."""
++    return [f"  - [ ] {option}" for option in options]
++
++
++def case_block(
++    slug: str,
++    manifest: dict[str, Any],
++    processed: dict[str, Any],
++    court_text: str,
++) -> str:
++    """Ведомость по одному делу: три графы и пустой вывод оценщика."""
++    rules = processed["rules"]
++    system_text = processed.get("operative_text", "")
++    verification = processed.get("verification", {})
++
++    lines: list[str] = []
++    lines.append(f"## {slug} — {manifest.get('category', '—')}")
++    lines.append(
++        f"Иск: {float(manifest.get('claim_amount') or 0):.0f} руб. · "
++        f"документов: {len(manifest.get('documents', []))}"
++    )
++    lines.append("")
++
++    # ── Исход ────────────────────────────────────────────────────────
++    lines.append("### Исход")
++    system_outcome = outcome_of(system_text)
++    court_outcome = outcome_of(court_text)
++    if not system_outcome:
++        system_outcome = ["не разобрано" + (" (пометка о неготовности)" if NEEDS_REVIEW in system_text else "")]
++    if not court_outcome:
++        court_outcome = ["не разобрано"]
++    lines.append(f"- система: {'; '.join(system_outcome)}")
++    lines.append(f"- суд: {'; '.join(court_outcome)}")
++    lines.append("- оценка:")
++    lines.extend(_checkbox_lines(("совпал", "не совпал", "не определено")))
++    lines.append("")
++
++    # ── Суммы ────────────────────────────────────────────────────────
++    lines.append("### Суммы")
++    claims = rules.get("claims", [])
++    lines.append(
++        f"- система: требования {len(claims)} шт., пошлина "
++        f"{float(rules.get('fee_paid') or 0):.0f} руб., итог "
++        f"{float(rules.get('total') or 0):.2f} руб. "
++        f"(с пошлиной {float(rules.get('total_with_fee') or 0):.2f} руб.)"
++    )
++    for claim in claims:
++        lines.append(
++            f"    - {float(claim.get('amount') or 0):.2f} руб. — "
++            f"{claim.get('basis') or 'без основания'}"
++            + (f" ({claim['source']})" if claim.get("source") else "")
++        )
++    court_amounts = rub_amounts(court_text)
++    if court_amounts:
++        lines.append("- суд (все суммы резолютивной, с контекстом):")
++        for amount, context in court_amounts:
++            lines.append(f"    - {amount} руб. — «…{context}…»")
++    else:
++        lines.append("- суд: рублёвых сумм в резолютивной не найдено")
++    total_ok = found_in(float(rules.get("total_with_fee") or 0), court_amounts)
++    claim_ok = found_in(float(manifest.get("claim_amount") or 0), court_amounts)
++    lines.append(
++        f"- число на число: итог системы среди сумм суда — "
++        f"{'НАЙДЕН' if total_ok else 'не найден'}; "
++        f"сумма иска — {'НАЙДЕНА' if claim_ok else 'не найдена'}"
++    )
++    lines.append("- оценка:")
++    lines.extend(_checkbox_lines(("верно", "частично", "неверно")))
++    lines.append("")
++
++    # ── Нормы ────────────────────────────────────────────────────────
++    lines.append("### Нормы")
++    diff = laws_diff(laws_in(system_text), laws_in(court_text))
++    lines.append(f"- совпали: {', '.join(diff['both']) or '—'}")
++    lines.append(f"- только у системы: {', '.join(diff['system_only']) or '—'}")
++    lines.append(f"- только у суда: {', '.join(diff['court_only']) or '—'}")
++    lines.append("- оценка:")
++    lines.extend(_checkbox_lines(("верно", "частично", "неверно")))
++    lines.append("")
++
++    # ── Справочно и вывод ────────────────────────────────────────────
++    issues = verification.get("issues", [])
++    by_severity: dict[str, int] = {}
++    for issue in issues:
++        by_severity[issue["severity"]] = by_severity.get(issue["severity"], 0) + 1
++    severity_text = ", ".join(
++        f"{level}: {count}" for level, count in sorted(by_severity.items())
++    )
++    lines.append("### Справочно: что отметила сама система")
++    lines.append(
++        f"статус {verification.get('status', '—')} · замечаний {len(issues)} "
++        + (f"({severity_text})" if severity_text else "")
++        + f" · утверждений без источника: {verification.get('unsupported_claims', 0)}"
++    )
++    for issue in issues[:5]:
++        lines.append(f"- [{issue['severity']}] {issue['reason'][:220]}")
++    if len(issues) > 5:
++        lines.append(f"- … и ещё {len(issues) - 5}")
++    lines.append("")
++    lines.append("### Вывод оценщика")
++    lines.append("ФИО / роль (юрист, студент магистратуры), дата: ______________")
++    lines.append("")
++    lines.append(
++        "Общий вывод по делу (суммы и исход сошлись ли по существу, "
++        "что система упустила):"
++    )
++    lines.append("")
++    lines.append("______________________________________________________________")
++    lines.append("")
++    return "\n".join(lines)
++
++
++HEADER = """# Оценочная ведомость по делам (п. 78 разбора рецензента)
++
++Генератор: scripts/eval_harness.py. Дата сборки: {date}. Дел: {count}.
++
++Как заполнять:
++
++- три графы на дело — исход, суммы, нормы. Слева — как увидела система
++  (правила, без модели), справа/выше — как записано в решении суда;
++- «число на число» и множества статей — механика, не оценка: совпадение
++  суммы не доказывает правильного исхода, а его несовпадение — ещё не
++  ошибка системы;
++- решение «совпал / не совпал» принимает оценщик, а не скрипт;
++- маркеры исхода грубые (корни слов): если стоит «не разобрано»,
++  решение читается вручную;
++- графа «Вывод оценщика» обязательна — без неё дело не считается
++  оценённым.
++
++Подробности запуска и расширения выборки: docs/evaluation.md.
++Результат не является юридическим заключением.
++
++"""
++
++
++async def build_worksheet(cases_dir: Path) -> tuple[str, int]:
++    harness = _load("eval_build_real_site", "build_real_site.py")
++    index_path = cases_dir / "index.json"
++    if not index_path.exists():
++        raise FileNotFoundError(f"нет {index_path}: сначала scripts/build_real_cases.py")
++    index = json.loads(index_path.read_text(encoding="utf-8"))
++
++    parts: list[str] = []
++    done = 0
++    for entry in index["cases"]:
++        slug = entry["slug"]
++        case_dir = cases_dir / slug
++        try:
++            processed = await harness.process(case_dir)
++        except Exception as exc:  # noqa: BLE001
++            parts.append(
++                f"## {slug}\n\nНе посчитан: {type(exc).__name__}: {exc}\n"
++            )
++            continue
++        manifest = json.loads((case_dir / "manifest.json").read_text(encoding="utf-8"))
++        court_text = (case_dir / "court_decision_reference.txt").read_text(
++            encoding="utf-8"
++        )
++        parts.append(case_block(slug, manifest, processed, court_text))
++        done += 1
++
++    header = HEADER.format(
++        date=datetime.now().strftime("%Y-%m-%d %H:%M"), count=done
++    )
++    return header + "\n".join(parts), done
++
++
++def main(argv: list[str] | None = None) -> int:
++    parser = argparse.ArgumentParser(description="Ведомость оценки для юриста")
++    parser.add_argument(
++        "--out", default=str(DEFAULT_OUT), help="куда писать ведомость"
++    )
++    parser.add_argument(
++        "--force", action="store_true", help="перезаписать существующий файл"
++    )
++    parser.add_argument(
++        "--cases-dir",
++        default=str(ROOT / "data" / "demo" / "real" / "cases"),
++        help="каталог дел",
++    )
++    args = parser.parse_args(argv)
++
++    out = Path(args.out)
++    if out.exists() and not args.force:
++        print(f"УЖЕ ЕСТЬ: {out} — не затираю заполненную оценку ( --force )")
++        return 1
++
++    text, done = asyncio.run(build_worksheet(Path(args.cases_dir)))
++    if not done:
++        print("ОШИБКА: ни одно дело не посчитано")
++        return 1
++    out.parent.mkdir(parents=True, exist_ok=True)
++    out.write_text(text, encoding="utf-8")
++    print(f"дел в ведомости: {done}\nфайл: {out}")
++    return 0
++
++
++if __name__ == "__main__":
++    sys.exit(main())
+-- 
+2.53.0.windows.2
+

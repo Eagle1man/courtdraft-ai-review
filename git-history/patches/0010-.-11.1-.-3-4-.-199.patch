@@ -1,0 +1,206 @@
+From 395a6fad13efda04cd79797185498e76ee84d469 Mon Sep 17 00:00:00 2001
+From: Eagle1man <orel198611@gmail.com>
+Date: Tue, 20 Oct 2026 14:41:44 +0300
+Subject: [PATCH 10/20] =?UTF-8?q?=D0=A8=D0=B0=D0=B1=D0=BB=D0=BE=D0=BD=20?=
+ =?UTF-8?q?=D0=BC=D0=B8=D1=80=D0=BE=D0=B2=D0=BE=D0=B3=D0=BE=20=D1=81=D1=83?=
+ =?UTF-8?q?=D0=B4=D1=8C=D0=B8:=20=D0=B2=D0=B2=D0=BE=D0=B4=D0=BD=D0=B0?=
+ =?UTF-8?q?=D1=8F=20+=20=D1=80=D0=B5=D0=B7=D0=BE=D0=BB=D1=8E=D1=82=D0=B8?=
+ =?UTF-8?q?=D0=B2=D0=BD=D0=B0=D1=8F=20(=D0=BF.=2011.1,=20=D1=87.=203-4=20?=
+ =?UTF-8?q?=D1=81=D1=82.=20199=20=D0=93=D0=9F=D0=9A)?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+- data/templates/world_judgment.json: вариант без мотивированного
+  решения - по ч. 3-4 ст. 199 ГПК мировой судья объявляет
+  резолютивную часть, мотивированное составляется по заявлению
+- evidence_pack.load_template(name=): API-параметр template_name был
+  принят, но игнорировался - теперь реально выбирает шаблон;
+  недопустимые имена отвергаются (защита от path traversal)
+- draft_service: load_template(name=template_name)
+- 4 теста
+---
+ backend/app/agents/evidence_pack.py   | 15 +++++--
+ backend/app/schemas/draft.py          |  4 +-
+ backend/app/services/draft_service.py |  2 +-
+ backend/tests/test_world_judgment.py  | 59 +++++++++++++++++++++++++++
+ data/templates/world_judgment.json    | 46 +++++++++++++++++++++
+ 5 files changed, 121 insertions(+), 5 deletions(-)
+ create mode 100644 backend/tests/test_world_judgment.py
+ create mode 100644 data/templates/world_judgment.json
+
+diff --git a/backend/app/agents/evidence_pack.py b/backend/app/agents/evidence_pack.py
+index 775c7bc..0f78c2c 100644
+--- a/backend/app/agents/evidence_pack.py
++++ b/backend/app/agents/evidence_pack.py
+@@ -150,10 +150,19 @@ class EvidencePack:
+         return "\n".join(lines)
+ 
+ 
+-def load_template(settings: Settings | None = None) -> dict[str, Any]:
+-    """Загрузить шаблон решения."""
++def load_template(
++    settings: Settings | None = None, *, name: str = "civil_judgment"
++) -> dict[str, Any]:
++    """Загрузить шаблон судебного акта по имени.
++
++    ``world_judgment`` — вариант для мирового судьи (ч. 3–4 ст. 199
++    ГПК РФ): стороны получают резолютивную часть, мотивированное
++    решение составляется по заявлению.
++    """
++    if not name.replace("_", "").isalnum():
++        raise ValueError(f"Недопустимое имя шаблона: {name}")
+     cfg = settings or get_settings()
+-    path = cfg.templates_dir / "civil_judgment.json"
++    path = cfg.templates_dir / f"{name}.json"
+     if not path.exists():
+         raise FileNotFoundError(f"Шаблон не найден: {path}")
+     parsed: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
+diff --git a/backend/app/schemas/draft.py b/backend/app/schemas/draft.py
+index bfe616d..e9d8ef5 100644
+--- a/backend/app/schemas/draft.py
++++ b/backend/app/schemas/draft.py
+@@ -111,7 +111,9 @@ class DraftGenerateIn(BaseModel):
+     """Запрос на формирование проекта."""
+ 
+     template_name: str = Field(
+-        default="civil_judgment", max_length=100, examples=["civil_judgment"]
++        default="civil_judgment",
++        max_length=100,
++        examples=["civil_judgment", "world_judgment"],
+     )
+     # Кто инициировал: попадает в аудит и в автора версии.
+     actor: str = Field(default="judge", max_length=60)
+diff --git a/backend/app/services/draft_service.py b/backend/app/services/draft_service.py
+index 1691de2..1af3019 100644
+--- a/backend/app/services/draft_service.py
++++ b/backend/app/services/draft_service.py
+@@ -131,7 +131,7 @@ class DraftService:
+         saved = await self.save_pack(case_id, pack)
+         logger.info("Пакет доказательств: %d фактов", saved)
+ 
+-        template = load_template()
++        template = load_template(name=template_name)
+         draft_result = await generate_draft(pack, template, provider=provider)
+ 
+         report = verify_draft(draft_result, pack)
+diff --git a/backend/tests/test_world_judgment.py b/backend/tests/test_world_judgment.py
+new file mode 100644
+index 0000000..c3c06ca
+--- /dev/null
++++ b/backend/tests/test_world_judgment.py
+@@ -0,0 +1,59 @@
++"""Шаблон для мирового судьи (п. 11.1 разбора, ч. 3–4 ст. 199 ГПК РФ)."""
++
++import asyncio
++
++import pytest
++
++from app.agents.draft_agent import generate_draft
++from app.agents.evidence_pack import EvidenceItem, EvidencePack, load_template
++
++
++def _pack() -> EvidencePack:
++    pack = EvidencePack(case_number="2-1234/2026", court_name="Мировой судья")
++    pack.participants.append("Образцов Пётр Петрович (истец)")
++    pack.items.append(
++        EvidenceItem(
++            category="claims",
++            text="Взыскать задолженность 150 000 руб.",
++            source_document="01_claim.txt",
++            source_type="CLAIM",
++            order=1,
++        )
++    )
++    return pack
++
++
++class _NoLLM:
++    name = "no-llm"
++    model = ""
++
++    async def generate(self, request):  # noqa: ANN001, ANN201
++        raise AssertionError("шаблон мирового судьи не должен звать модель")
++
++
++class TestWorldJudgmentTemplate:
++    def test_template_loads(self) -> None:
++        template = load_template(name="world_judgment")
++        keys = [s["key"] for s in template["sections"]]
++        assert keys == ["introductory", "operative"]
++        assert "ч. 3–4 ст. 199" in template["notes"]
++
++    def test_draft_has_two_rules_built_sections(self) -> None:
++        template = load_template(name="world_judgment")
++        result = asyncio.run(generate_draft(_pack(), template, provider=_NoLLM()))
++        keys = [s.key for s in result.sections]
++        assert keys == ["introductory", "operative"]
++        assert all(s.is_mock is False for s in result.sections)
++
++    def test_no_motivating_part_in_text(self) -> None:
++        template = load_template(name="world_judgment")
++        result = asyncio.run(generate_draft(_pack(), template, provider=_NoLLM()))
++        text = result.text
++        assert "УСТАНОВИЛ" not in text
++        assert "РЕШИЛ" in text
++
++    def test_rejects_bad_name(self) -> None:
++        with pytest.raises(ValueError):
++            load_template(name="../secret")
++        with pytest.raises(FileNotFoundError):
++            load_template(name="unknown_template")
+diff --git a/data/templates/world_judgment.json b/data/templates/world_judgment.json
+new file mode 100644
+index 0000000..8880c54
+--- /dev/null
++++ b/data/templates/world_judgment.json
+@@ -0,0 +1,46 @@
++{
++  "name": "world_judgment",
++  "description": "Решение мирового судьи: вводная часть и резолютивная без мотивированного решения. Ч. 3–4 ст. 199 ГПК РФ.",
++  "legal_basis": "ст. 198, 199 ГПК РФ",
++  "language": "ru",
++  "notes": "Вариант для мирового судьи. По ч. 3–4 ст. 199 ГПК РФ мировой судья может объявить резолютивную часть решения и составить мотивированное решение позже — по заявлению стороны в течение пяти дней. Шаблон содержит только вводную и резолютивную части; описательная и мотивировочная части генерируются по шаблону civil_judgment, если мотивированное решение всё же нужно. Система готовит проект, решение принимает судья.",
++  "sections": [
++    {
++      "key": "introductory",
++      "name": "Вводная часть",
++      "purpose": "дата и место объявления решения, состав суда, номер дела, стороны, предмет иска",
++      "required_fields": [
++        "court_name",
++        "decision_date",
++        "case_number",
++        "plaintiff",
++        "defendant",
++        "claim_subject",
++        "judge",
++        "panel"
++      ],
++      "prompt_hint": "Не используется: раздел собирается правилами.",
++      "evidence_categories": ["case_metadata", "participants"]
++    },
++    {
++      "key": "operative",
++      "name": "РЕШИЛ",
++      "purpose": "резолютивная часть: что постановлено, в каком размере, в какие сроки",
++      "required_fields": ["decision_items"],
++      "prompt_hint": "Не используется: раздел собирается правилами.",
++      "evidence_categories": ["decision_items", "claims"]
++    }
++  ],
++  "evidence_categories": {
++    "case_metadata": "Номер дела, суд, категория, статус",
++    "participants": "Участники и их роли",
++    "claims": "Требования сторон",
++    "objections": "Возражения ответчика",
++    "evidence": "Доказательства и их подтверждение",
++    "established_facts": "Установленные судом обстоятельства",
++    "disputed_facts": "Спорные обстоятельства",
++    "legal_position": "Правовая позиция, нормы права",
++    "unresolved": "Пробелы, вопросы без ответа",
++    "decision_items": "Пункты резолютивной части"
++  }
++}
+-- 
+2.53.0.windows.2
+

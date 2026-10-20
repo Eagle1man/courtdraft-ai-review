@@ -1,0 +1,213 @@
+/* Оформление диалогового окна демонстрации.
+ *
+ * Отдельный файл, а не дописывание app.css: стили интерфейса
+ * продукта копируются в сайт как есть, и дописывать туда демо-специфичные
+ * правила нельзя — при следующей сборке они потерялись бы молча.
+ */
+
+.chat-page {
+  display: grid;
+  grid-template-columns: 300px 1fr;
+  gap: 20px;
+  align-items: start;
+  padding-top: 20px;
+  padding-bottom: 40px;
+}
+
+.chat-side h2 {
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--muted);
+  margin: 0 0 8px;
+}
+
+.chat-case {
+  margin: 0 0 4px;
+  font-size: 14px;
+}
+
+.chat-suggest {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.chat-chip {
+  display: block;
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.35;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--paper);
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.chat-chip:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.chat-window {
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  display: flex;
+  flex-direction: column;
+  min-height: 560px;
+  overflow: hidden;
+}
+
+.chat-log {
+  flex: 1;
+  overflow-y: auto;
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  background: #fbfbf9;
+}
+
+.bubble {
+  max-width: 84%;
+}
+
+.bubble-user {
+  align-self: flex-end;
+}
+
+.bubble-body {
+  padding: 11px 14px;
+  border-radius: 12px;
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.bubble-system .bubble-body {
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-top-left-radius: 3px;
+}
+
+.bubble-user .bubble-body {
+  background: #16294a;
+  color: #fff;
+  border-top-right-radius: 3px;
+}
+
+.bubble-body p {
+  margin: 0 0 8px;
+}
+
+.bubble-body p:last-child {
+  margin-bottom: 0;
+}
+
+.bubble-body ul {
+  margin: 6px 0 8px;
+  padding-left: 20px;
+}
+
+.bubble-body li {
+  margin-bottom: 4px;
+}
+
+.bubble-body blockquote {
+  margin: 8px 0;
+  padding: 10px 14px;
+  background: #f4f4f0;
+  border-left: 3px solid var(--line-strong);
+  white-space: pre-wrap;
+  font-size: 13.5px;
+}
+
+.cite {
+  color: var(--muted);
+  font-size: 12.5px;
+  font-style: italic;
+}
+
+.sev {
+  font-size: 11.5px;
+  letter-spacing: 0.4px;
+}
+
+.sev-CRITICAL,
+.sev-HIGH {
+  color: var(--danger);
+}
+
+.sev-MEDIUM {
+  color: #8a5b00;
+}
+
+.sev-LOW {
+  color: var(--muted);
+}
+
+.chat-input {
+  display: flex;
+  gap: 10px;
+  padding: 12px 14px;
+  border-top: 1px solid var(--line);
+  background: var(--paper);
+}
+
+.chat-input input {
+  flex: 1;
+  font: inherit;
+  font-size: 14px;
+  padding: 10px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: #fff;
+  color: var(--ink);
+}
+
+.chat-input input:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+@media (max-width: 900px) {
+  .chat-page {
+    grid-template-columns: 1fr;
+  }
+
+  .bubble {
+    max-width: 96%;
+  }
+}
+
+/* Выбор дела в демонстрации по десяти реальным делам. */
+.case-select {
+  width: 100%;
+  font: inherit;
+  font-size: 13.5px;
+  padding: 8px 10px;
+  margin-bottom: 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: #fff;
+  color: var(--ink);
+}

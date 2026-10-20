@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Диалог с системой — ИИ помощник судьи</title>
+<meta name="description" content="Демонстрация ИИ помощника судьи в диалоге: система готовит проект судебного решения по материалам дела и отвечает, откуда взята каждая сумма.">
+<link rel="stylesheet" href="app.css">
+<link rel="stylesheet" href="chat.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#9878;</text></svg>">
+</head>
+<body>
+
+<!--
+  Диалоговое окно демонстрации.
+
+  Отвечает не декоративный текст, а данные того же прогона, что лежат
+  в demo-data.json: требования с суммами и источниками, итог, стороны,
+  документы, замечания проверки. Ответы собираются по правилам
+  демонстрации из этих чисел, поэтому диалог не может разойтись с
+  проектом: оба показывают один и тот же прогон.
+
+  На вопрос, на который в материалах ответа нет, окно отвечает, что не
+  знает. Для этого продукта выдуманный ответ хуже отсутствующего.
+-->
+
+<header class="top">
+  <div class="wrap">
+    <div class="brand">
+      <span class="mark">⚖</span>
+      <div>
+        <h1>ИИ помощник судьи</h1>
+        <p class="sub">Диалог с системой по материалам дела</p>
+      </div>
+    </div>
+    <div class="status">
+      <a href="../index.html">← на главную</a> ·
+      <a href="index.html">проект целиком</a><br>
+      <span id="mode">загрузка…</span>
+    </div>
+  </div>
+</header>
+
+<div class="notice demo-banner" id="demo-note">
+  <strong>Запись демонстрационного прогона.</strong>
+  Материалы дела синтетические. Ответы окна берутся из того же прогона,
+  что и проект решения на соседней странице, — числа в них настоящие,
+  придумывать нечего. Новое дело здесь завести нельзя: система работает
+  локально на машине разработчика.
+</div>
+
+<main class="wrap chat-page">
+
+  <aside class="chat-side">
+    <h2>Дело</h2>
+    <select id="case-select" class="case-select" aria-label="Выбор дела"></select>
+    <p class="chat-case" id="case-line">—</p>
+    <p class="chat-case muted" id="court-line">—</p>
+    <p class="chat-case muted" id="case-party">—</p>
+
+    <h2 class="mt">Можно спросить</h2>
+    <ul class="chat-suggest" id="suggest"></ul>
+
+    <h2 class="mt">Материалы дела</h2>
+    <ul class="doc-list" id="doc-list">
+      <li class="muted">Загрузка…</li>
+    </ul>
+
+    <p class="muted small mt">
+      Дела обезличены: фамилии, названия организаций и номера дел
+      удалены. Тексты взяты из открытого корпуса судебных решений.
+      Система готовит <strong>проект</strong>: решение принимает судья.
+    </p>
+  </aside>
+
+  <section class="chat-window" aria-label="Диалог с системой">
+    <div class="chat-log" id="log" role="log" aria-live="polite"></div>
+
+    <form class="chat-input" id="form" autocomplete="off">
+      <label class="sr-only" for="ask">Вопрос системе</label>
+      <input
+        type="text"
+        id="ask"
+        name="ask"
+        placeholder="Например: откуда взялась сумма 155 100 рублей?"
+        required>
+      <button class="btn primary" type="submit">Спросить</button>
+    </form>
+  </section>
+
+</main>
+
+<footer class="wrap foot">
+  Все данные и модели работают локально. На этом сайте показаны только
+  синтетические материалы демонстрационного дела.
+</footer>
+
+<script src="chat.js"></script>
+</body>
+</html>

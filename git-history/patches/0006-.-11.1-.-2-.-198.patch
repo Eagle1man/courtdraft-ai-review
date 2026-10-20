@@ -1,0 +1,212 @@
+From 8f247262612c4f45be2b1b434fc6e475b7479c88 Mon Sep 17 00:00:00 2001
+From: Eagle1man <orel198611@gmail.com>
+Date: Tue, 20 Oct 2026 14:08:34 +0300
+Subject: [PATCH 06/20] =?UTF-8?q?=D0=92=D0=B2=D0=BE=D0=B4=D0=BD=D0=B0?=
+ =?UTF-8?q?=D1=8F=20=D1=87=D0=B0=D1=81=D1=82=D1=8C=20=D0=BF=D1=80=D0=B0?=
+ =?UTF-8?q?=D0=B2=D0=B8=D0=BB=D0=B0=D0=BC=D0=B8=20(=D0=BF.=2011.1,=20?=
+ =?UTF-8?q?=D1=87.=202=20=D1=81=D1=82.=20198=20=D0=93=D0=9F=D0=9A)?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+- draft_agent.py: _build_intro_section в RULES_BUILT_SECTIONS -
+  Именем РФ, суд и номер дела из карточки, стороны из пакета,
+  предмет спора из требований; состав суда, секретарь и дата
+  решения ТРЕБУЕТ ПРОВЕРКИ СПЕЦИАЛИСТОМ, а не выдуманные моделью
+- тесты: реквизиты из пакета, отметки незаполненного, модель
+  не вызывается (provider падает при попытке)
+
+602 passed, ruff clean, mypy --strict clean
+---
+ backend/app/agents/draft_agent.py   | 63 ++++++++++++++++++++-
+ backend/tests/test_intro_section.py | 86 +++++++++++++++++++++++++++++
+ 2 files changed, 146 insertions(+), 3 deletions(-)
+ create mode 100644 backend/tests/test_intro_section.py
+
+diff --git a/backend/app/agents/draft_agent.py b/backend/app/agents/draft_agent.py
+index c812c51..e544494 100644
+--- a/backend/app/agents/draft_agent.py
++++ b/backend/app/agents/draft_agent.py
+@@ -36,7 +36,7 @@ NO_LAW_FOUND = "Норма права не найдена. Требуется п
+ 
+ # Разделы, которые собираются по правилам, а не генерируются моделью.
+ # Ключи совпадают с ключами шаблона data/templates/civil_judgment.json.
+-RULES_BUILT_SECTIONS = frozenset({"operative", "objections"})
++RULES_BUILT_SECTIONS = frozenset({"operative", "objections", "introductory"})
+ 
+ SYSTEM_PROMPT = """Ты — помощник судьи. Пишешь ТОЛЬКО текст одного раздела решения суда.
+ 
+@@ -391,6 +391,61 @@ def _build_operative_section(section: dict[str, Any], pack: EvidencePack) -> Sec
+     )
+ 
+ 
++def _side_name(pack: EvidencePack, role: str) -> str:
++    """Имя стороны из пакета: «ФИО (роль)» → ФИО при совпадении роли."""
++    marker = f" ({role})"
++    for entry in pack.participants:
++        if entry.endswith(marker):
++            return entry[: -len(marker)]
++    return ""
++
++
++def _build_intro_section(section: dict[str, Any], pack: EvidencePack) -> SectionDraft:
++    """Вводная часть по ч. 2 ст. 198 ГПК РФ — правилами, не моделью.
++
++    Рецензент (п. 11.1): в демо вводная пустая, хотя суд, номер дела и
++    стороны есть в карточке. Модель на 1,5B реквизиты теряла, а
++    выдумывать состав суда и дату решения нельзя — их в материалах нет.
++    Всё известное из пакета ставится строкой; чего в материалах нет —
++    честной отметкой, которую судья заполнит сам.
++    """
++    lines: list[str] = ["Именем Российской Федерации", ""]
++    if pack.court_name:
++        lines.append(pack.court_name)
++    if pack.case_number:
++        lines.append(f"Дело № {pack.case_number}")
++    lines.append("")
++
++    for role in ("истец", "ответчик"):
++        name = _side_name(pack, role)
++        lines.append(f"{role.capitalize()}: {name or NEEDS_REVIEW}")
++
++    claims = pack.by_category("claims")
++    if claims:
++        subject = claims[0].text.strip()
++        if len(subject) > 400:
++            subject = subject[:400].rstrip() + "…"
++        lines.append(f"Предмет спора: {subject}")
++    else:
++        lines.append(f"Предмет спора: {NEEDS_REVIEW}")
++
++    # Состав суда, секретарь и дата решения — реквизиты судебного акта,
++    # которых нет ни в иске, ни в договоре. Модели они недоступны, а
++    # без отметки выглядели бы как уже заполненные.
++    lines.append(f"Состав суда: {NEEDS_REVIEW}")
++    lines.append(f"Секретарь судебного заседания: {NEEDS_REVIEW}")
++    lines.append(f"Дата принятия решения: {NEEDS_REVIEW}")
++
++    return SectionDraft(
++        key=section["key"],
++        name=section["name"],
++        text="\n".join(lines),
++        # Реквизиты взяты из материалов, а не из заглушки модели.
++        is_mock=False,
++        needs_review=True,
++    )
++
++
+ def _build_objections_section(
+     section: dict[str, Any], pack: EvidencePack
+ ) -> SectionDraft:
+@@ -520,12 +575,14 @@ async def generate_draft(
+     started = time.perf_counter()
+ 
+     for section in sections_to_do:
+-        # Резолютивная и «Доводы ответчика» — правилами, не моделью.
++        # Резолютивная, «Доводы ответчика» и вводная — правилами, не моделью.
+         if section["key"] in RULES_BUILT_SECTIONS:
+             if section["key"] == "operative":
+                 result.sections.append(_build_operative_section(section, pack))
+-            else:
++            elif section["key"] == "objections":
+                 result.sections.append(_build_objections_section(section, pack))
++            else:
++                result.sections.append(_build_intro_section(section, pack))
+             continue
+ 
+         request_text, citations = build_section_prompt(section, pack)
+diff --git a/backend/tests/test_intro_section.py b/backend/tests/test_intro_section.py
+new file mode 100644
+index 0000000..f16f0d5
+--- /dev/null
++++ b/backend/tests/test_intro_section.py
+@@ -0,0 +1,86 @@
++﻿"""Вводная часть правилами, а не моделью (п. 11.1 разбора, ч. 2 ст. 198 ГПК)."""
++
++import asyncio
++
++from app.agents.draft_agent import generate_draft
++from app.agents.evidence_pack import EvidenceItem, EvidencePack
++
++TEMPLATE = {
++    "name": "test",
++    "sections": [
++        {
++            "key": "introductory",
++            "name": "Вводная часть",
++            "purpose": "реквизиты судебного акта",
++            "evidence_categories": ["case_metadata", "participants"],
++        }
++    ],
++}
++
++
++def _pack(*, with_sides: bool = True, with_claims: bool = True) -> EvidencePack:
++    pack = EvidencePack(
++        case_number="2-1234/2026",
++        court_name="Мировой судья судебного участка № 1",
++    )
++    if with_sides:
++        pack.participants.extend(
++            [
++                "Образцов Пётр Петрович (истец)",
++                "ООО «Фирма-Трейд» (ответчик)",
++            ]
++        )
++    if with_claims:
++        pack.items.append(
++            EvidenceItem(
++                category="claims",
++                text="Взыскать задолженность по договору в размере 150 000 руб.",
++                source_document="01_claim.txt",
++                source_type="CLAIM",
++                order=1,
++            )
++        )
++    return pack
++
++
++class _NoLLM:
++    name = "no-llm"
++    model = ""
++
++    async def generate(self, request):  # noqa: ANN001, ANN201
++        raise AssertionError("вводная часть не должна обращаться к модели")
++
++
++class TestIntroSection:
++    def test_requisites_from_pack(self) -> None:
++        result = asyncio.run(generate_draft(_pack(), TEMPLATE, provider=_NoLLM()))
++        section = result.sections[0]
++        assert section.key == "introductory"
++        assert section.is_mock is False
++        assert "Именем Российской Федерации" in section.text
++        assert "Мировой судья судебного участка № 1" in section.text
++        assert "Дело № 2-1234/2026" in section.text
++        assert "Истец: Образцов Пётр Петрович" in section.text
++        assert "Ответчик: ООО «Фирма-Трейд»" in section.text
++        assert "Предмет спора: Взыскать задолженность" in section.text
++
++    def test_unavailable_requisites_marked(self) -> None:
++        # Состав суда, секретарь и дата — их нет в материалах: ставится
++        # отметка, а не выдуманные реквизиты.
++        result = asyncio.run(generate_draft(_pack(), TEMPLATE, provider=_NoLLM()))
++        section = result.sections[0]
++        assert section.needs_review is True
++        assert "Состав суда: ТРЕБУЕТ ПРОВЕРКИ СПЕЦИАЛИСТОМ" in section.text
++        assert "Секретарь судебного заседания" in section.text
++        assert "Дата принятия решения: ТРЕБУЕТ ПРОВЕРКИ СПЕЦИАЛИСТОМ" in section.text
++
++    def test_missing_sides_marked(self) -> None:
++        result = asyncio.run(
++            generate_draft(
++                _pack(with_sides=False, with_claims=False), TEMPLATE, provider=_NoLLM()
++            )
++        )
++        section = result.sections[0]
++        assert "Истец: ТРЕБУЕТ ПРОВЕРКИ СПЕЦИАЛИСТОМ" in section.text
++        assert "Ответчик: ТРЕБУЕТ ПРОВЕРКИ СПЕЦИАЛИСТОМ" in section.text
++        assert "Предмет спора: ТРЕБУЕТ ПРОВЕРКИ СПЕЦИАЛИСТОМ" in section.text
+-- 
+2.53.0.windows.2
+

@@ -1,0 +1,282 @@
+From 1da1dffc0ff83806091a4531efbb546a3659203d Mon Sep 17 00:00:00 2001
+From: Eagle1man <orel198611@gmail.com>
+Date: Mon, 19 Oct 2026 18:33:27 +0300
+Subject: [PATCH 03/20] =?UTF-8?q?=D0=9F=D1=80=D0=B5=D0=B4=D0=BC=D0=B5?=
+ =?UTF-8?q?=D1=82=20=D0=B4=D0=BE=D0=BA=D0=B0=D0=B7=D1=8B=D0=B2=D0=B0=D0=BD?=
+ =?UTF-8?q?=D0=B8=D1=8F=20=D0=BF=D0=BE=20=D0=BA=D0=B0=D1=82=D0=B5=D0=B3?=
+ =?UTF-8?q?=D0=BE=D1=80=D0=B8=D0=B8=20=D0=B4=D0=B5=D0=BB=D0=B0=20(=D0=BF.?=
+ =?UTF-8?q?=205.4,=2011.3)?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+- app/verification/subject_of_proof.py: таблица 'обстоятельство -
+  доказательства' по взысканию долга: заключение договора, поставка/
+  услуги, факт оплаты, размер долга, неустойка/проценты; обстоятельство
+  без единого документа честно помечается как не покрытое
+- engine.py: считается по материалам пакета (не по тексту модели),
+  в to_dict как subject_of_proof, в human_summary выводится блок
+  'Ни одним документом не подтверждено' и когда замечаний нет
+- Надзор: система не решает спор, а показывает пробелы доказывания
+
+595 passed, ruff clean, mypy --strict clean (57 файлов)
+---
+ backend/app/verification/engine.py           | 41 +++++++--
+ backend/app/verification/subject_of_proof.py | 90 ++++++++++++++++++++
+ backend/tests/test_subject_of_proof.py       | 63 ++++++++++++++
+ 3 files changed, 187 insertions(+), 7 deletions(-)
+ create mode 100644 backend/app/verification/subject_of_proof.py
+ create mode 100644 backend/tests/test_subject_of_proof.py
+
+diff --git a/backend/app/verification/engine.py b/backend/app/verification/engine.py
+index d308629..a704858 100644
+--- a/backend/app/verification/engine.py
++++ b/backend/app/verification/engine.py
+@@ -31,6 +31,7 @@ from app.drafting.requirements import extract_requirements
+ from app.verification.jurisdiction import check_jurisdiction
+ from app.verification.laws import LawRegistry, extract_fee, fee_matches, state_fee
+ from app.verification.persons import check_section
++from app.verification.subject_of_proof import ProofFact, subject_of_proof
+ 
+ 
+ class VerificationStatus(StrEnum):
+@@ -87,6 +88,10 @@ class VerificationReport:
+     sections_checked: int = 0
+     claims_checked: int = 0
+     unsupported_claims: int = 0
++    # Таблица «обстоятельство — доказательства» по предмету доказывания.
++    # Это не замечание, а карта: судье виднее, что поставками считать,
++    # поэтому в статус проверки не входит.
++    facts: list[ProofFact] = field(default_factory=list)
+ 
+     @property
+     def needs_review(self) -> bool:
+@@ -106,24 +111,40 @@ class VerificationReport:
+             "claims_checked": self.claims_checked,
+             "unsupported_claims": self.unsupported_claims,
+             "by_severity": self.by_severity(),
++            "subject_of_proof": [f.to_dict() for f in self.facts],
+         }
+ 
+     def human_summary(self) -> str:
+-        if not self.issues:
++        # Неподтверждённые обстоятельства показываются и без замечаний:
++        # таблица предмета доказывания — самостоятельная ценность, и
++        # «Замечаний нет» на пустой таблице прятало бы пробел дела.
++        uncovered = [f for f in self.facts if not f.covered]
++        if not self.issues and not uncovered:
+             return "Замечаний нет: все разделы опираются на материалы дела."
+ 
+-        lines = [f"Статус проверки: {self.status.value}", ""]
++        lines = (
++            [f"Статус проверки: {self.status.value}", ""]
++            if self.issues
++            else ["Замечаний по разделам нет.", ""]
++        )
+         for issue in self.issues:
+             lines.append(
+                 f"[{issue.severity.value}] {issue.section or 'проект целиком'}\n"
+                 f"  {issue.type.value}: {issue.reason}\n"
+                 f"  фрагмент: {issue.text[:140]}"
+             )
+-        counts = self.by_severity()
+-        lines.append("")
+-        lines.append(
+-            "Итого: " + ", ".join(f"{k} — {v}" for k, v in sorted(counts.items()))
+-        )
++        if self.issues:
++            counts = self.by_severity()
++            lines.append("")
++            lines.append(
++                "Итого: " + ", ".join(f"{k} — {v}" for k, v in sorted(counts.items()))
++            )
++        uncovered = [f for f in self.facts if not f.covered]
++        if uncovered:
++            lines.append("")
++            lines.append("Ни одним документом не подтверждено (предмет доказывания):")
++            for fact in uncovered:
++                lines.append(f"  — {fact.circumstance}")
+         return "\n".join(lines)
+ 
+ 
+@@ -575,6 +596,12 @@ def verify_draft(
+                 )
+             )
+ 
++    # ── Таблица «обстоятельство — доказательства» ──────────────────
++    # Считается по материалам, а не по проекту: она отвечает на вопрос,
++    # откуда взято каждое обстоятельство, и её нельзя подделать текстом
++    # модели.
++    report.facts = subject_of_proof(pack.items)
++
+     # ── Итоговый статус ────────────────────────────────────────────
+     critical = [i for i in report.issues if i.severity is Severity.CRITICAL]
+     if critical or report.issues:
+diff --git a/backend/app/verification/subject_of_proof.py b/backend/app/verification/subject_of_proof.py
+new file mode 100644
+index 0000000..fb8dceb
+--- /dev/null
++++ b/backend/app/verification/subject_of_proof.py
+@@ -0,0 +1,90 @@
++"""Предмет доказывания по категории дела (п. 5.4, 11.3 разбора).
++
++Для каждой категории дел положен перечень обстоятельств, подлежащих
++установлению. Система показывает судье таблицу: какое обстоятельство
++каким документом подтверждено, а какое — ничем. Это не вывод
++о правоте сторон, а карта доказательств: решение остаётся за судьёй.
++
++Первая категория — взыскание долга по договору (поставки, купли-продажи,
++возмездного оказания услуг): перечень из разбора рецензента. Обстоятельство
++считается освещённым, когда хотя бы один документ дела содержит маркер
++категории; этим документом и ссылается таблица. Нет ни одного —
++обстоятельство остаётся непроверенным, и это должно быть видно, а не
++спрятано за общими словами о «совокупности доказательств».
++"""
++
++from __future__ import annotations
++
++from dataclasses import dataclass
++
++from app.agents.evidence_pack import EvidenceItem
++
++
++@dataclass(frozen=True)
++class ProofFact:
++    """Одно обстоятельство предмета доказывания и его документы."""
++
++    circumstance: str
++    docs: tuple[str, ...]
++    covered: bool
++
++    def to_dict(self) -> dict[str, object]:
++        return {
++            "circumstance": self.circumstance,
++            "docs": list(self.docs),
++            "covered": self.covered,
++        }
++
++
++#: Перечень обстоятельств по взысканию задолженности по договору.
++#: Маркеры строчные — сверка идёт по тексту, приведённому к нижнему
++#: регистру. Обстоятельства взяты из предложенного рецензентом
++#: предмета доказывания (п. 5.4).
++DEBT_FACTS: tuple[tuple[str, tuple[str, ...]], ...] = (
++    (
++        "заключение договора",
++        ("договор", "соглашение", "контракт", "заключен"),
++    ),
++    (
++        "поставка товара / оказание услуг (документы об исполнении)",
++        ("накладн", "упд", "акт", "товарн", "счет-фактур", "отгрузк", "услуг"),
++    ),
++    (
++        "факт оплаты или неоплаты",
++        ("платежн", "перечислен", "оплат", "акт сверки", "задолженност", "долг"),
++    ),
++    (
++        "размер долга",
++        ("задолженност", "сумм", "цена", "стоимост", "руб"),
++    ),
++    (
++        "расчёт неустойки или процентов",
++        ("неустойк", "пен", "пени", "процент"),
++    ),
++)
++
++
++def subject_of_proof(items: list[EvidenceItem]) -> list[ProofFact]:
++    """Таблица «обстоятельство — доказательства» по материалам дела.
++
++    Документ считается упоминанием обстоятельства, когда маркер нашёлся
++    в тексте его фрагмента. По одному документу в списке источников не
++    повторяемся.
++    """
++    facts: list[ProofFact] = []
++    for circumstance, markers in DEBT_FACTS:
++        docs: list[str] = []
++        for item in items:
++            text = item.text.lower()
++            if any(marker in text for marker in markers) and (
++                item.source_document not in docs
++            ):
++                docs.append(item.source_document)
++        facts.append(
++            ProofFact(
++                circumstance=circumstance,
++                docs=tuple(docs),
++                covered=bool(docs),
++            )
++        )
++    return facts
+diff --git a/backend/tests/test_subject_of_proof.py b/backend/tests/test_subject_of_proof.py
+new file mode 100644
+index 0000000..af8e9e4
+--- /dev/null
++++ b/backend/tests/test_subject_of_proof.py
+@@ -0,0 +1,63 @@
++"""Таблица «обстоятельство — доказательства» (п. 5.4 разбора)."""
++
++from app.agents.evidence_pack import EvidenceItem, EvidencePack
++from app.verification.engine import verify_draft
++from app.verification.subject_of_proof import subject_of_proof
++
++
++def _item(document: str, text: str, order: int) -> EvidenceItem:
++    return EvidenceItem(
++        category="evidence",
++        text=text,
++        source_document=document,
++        source_type="EVIDENCE",
++        order=order,
++    )
++
++
++class TestSubjectOfProof:
++    def test_covered_circumstance_lists_document(self) -> None:
++        pack = EvidencePack(case_number="T-1")
++        pack.items.append(_item("01_claim.txt", "Между сторонами заключён договор.", 1))
++        pack.items.append(_item("02_bill.txt", "Накладная на отгрузку товара.", 2))
++        facts = subject_of_proof(pack.items)
++        contract = facts[0]
++        assert contract.covered
++        assert contract.docs == ("01_claim.txt",)
++        delivery = facts[1]
++        assert delivery.docs == ("02_bill.txt",)
++
++    def test_uncovered_circumstance_reported(self) -> None:
++        facts = subject_of_proof(
++            [_item("01_claim.txt", "Истец просит взыскать долг.", 1)]
++        )
++        penalty = facts[-1]
++        assert not penalty.covered
++        assert not penalty.docs
++
++    def test_no_duplicate_documents(self) -> None:
++        pack = EvidencePack(case_number="T-2")
++        pack.items.append(
++            _item("01_claim.txt", "Договор от 5 марта 2013 года. Долг по договору.", 1)
++        )
++        facts = subject_of_proof(pack.items)
++        assert facts[0].docs == ("01_claim.txt",)
++        assert facts[2].docs == ("01_claim.txt",)
++
++    def test_report_serializes_facts(self) -> None:
++        pack = EvidencePack(case_number="T-3")
++        pack.items.append(_item("01_claim.txt", "Договор оставлен без оплаты.", 1))
++        draft = type("D", (), {})()
++        draft.sections = []
++        report = verify_draft(draft, pack)
++        data = report.to_dict()
++        assert len(data["subject_of_proof"]) == 5
++
++    def test_uncovered_facts_in_summary(self) -> None:
++        pack = EvidencePack(case_number="T-4")
++        draft = type("D", (), {})()
++        draft.sections = []
++        report = verify_draft(draft, pack)
++        summary = report.human_summary()
++        assert "Ни одним документом не подтверждено" in summary
++        assert "заключение договора" in summary
+-- 
+2.53.0.windows.2
+

@@ -1,0 +1,239 @@
+From bdd5893235221070fff4a876ce519c6f112d5ab7 Mon Sep 17 00:00:00 2001
+From: Eagle1man <orel198611@gmail.com>
+Date: Tue, 20 Oct 2026 15:54:00 +0300
+Subject: [PATCH 13/20] =?UTF-8?q?=D0=97=D0=B0=D1=8F=D0=B2=D0=BB=D0=B5?=
+ =?UTF-8?q?=D0=BD=D0=B8=D1=8F,=20=D0=BC=D0=B5=D0=BD=D1=8F=D1=8E=D1=89?=
+ =?UTF-8?q?=D0=B8=D0=B5=20=D0=B8=D1=81=D1=85=D0=BE=D0=B4=20(=D0=BF.=2076)?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+- engine.py: STATEMENT_LIMITATION и STATEMENT_PENALTY_REDUCTION (HIGH) -
+  пропуск срока исковой давности (ст. 199 ГК) и снижение неустойки
+  (ст. 333 ГК) суд разрешает только по заявлению стороны; если заявление
+  есть в отзывах/протоколе, а проект молчит - судья не видит вопрос
+- маркеры по корням (давност, сниж, уменьш), падежные фразы разъезжались
+- выбор фрагмента-источника без StopIteration
+- 7 тестов
+
+626 passed, ruff clean, mypy --strict clean
+---
+ backend/app/verification/engine.py |  72 ++++++++++++++++++-
+ backend/tests/test_statements.py   | 108 +++++++++++++++++++++++++++++
+ 2 files changed, 179 insertions(+), 1 deletion(-)
+ create mode 100644 backend/tests/test_statements.py
+
+diff --git a/backend/app/verification/engine.py b/backend/app/verification/engine.py
+index 3ebf46d..5c1f05e 100644
+--- a/backend/app/verification/engine.py
++++ b/backend/app/verification/engine.py
+@@ -24,7 +24,7 @@ from enum import StrEnum
+ from pathlib import Path
+ 
+ from app.agents.draft_agent import NEEDS_REVIEW, DraftResult
+-from app.agents.evidence_pack import MONTHS, EvidencePack
++from app.agents.evidence_pack import MONTHS, EvidenceItem, EvidencePack
+ from app.config import Settings
+ from app.drafting.operative import DEFAULT_LEGAL_BASIS
+ from app.drafting.requirements import extract_requirements
+@@ -52,6 +52,8 @@ class IssueType(StrEnum):
+     OBJECTIONS_UNADDRESSED = "OBJECTIONS_UNADDRESSED"
+     PRETRIAL_UNADDRESSED = "PRETRIAL_UNADDRESSED"
+     FEE_IN_CLAIM_PRICE = "FEE_IN_CLAIM_PRICE"
++    STATEMENT_LIMITATION = "STATEMENT_LIMITATION"
++    STATEMENT_PENALTY_REDUCTION = "STATEMENT_PENALTY_REDUCTION"
+ 
+ 
+ class Severity(StrEnum):
+@@ -686,6 +688,74 @@ def verify_draft(
+             )
+         )
+ 
++    # ── Заявления, меняющие исход (п. 76) ───────────────────────────
++    # Пропуск срока исковой давности (ст. 199 ГК РФ) и снижение
++    # неустойки (ст. 333 ГК РФ) суд разрешает только по заявлению
++    # стороны — по своей инициативе они не применяются. Если такое
++    # заявление есть в отзывах или протоколе, а проект о нём молчит,
++    # судья не видит вопроса, который надо разрешить отдельно.
++    # Молчание проекта проверяется по тем же маркерам, что и наличие
++    # в материалах: лишнего не выдумываем.
++    party_statements = [
++        item
++        for item in pack.items
++        if item.category in ("objections", "protocol_findings", "disputed_facts")
++    ]
++    statement_text = " ".join(i.text.lower() for i in party_statements)
++
++    def _find_statement(*needles: str) -> EvidenceItem | None:
++        """Фрагмент-заявление, в котором нашлось хоть одно слово-маркер.
++
++        Ищется по тому же признаку, по которому сработало условие, чтобы
++        случай не StopIteration, когда маркер собран из разных фрагментов.
++        """
++        for item in party_statements:
++            low = item.text.lower()
++            if any(needle in low for needle in needles):
++                return item
++        return party_statements[0] if party_statements else None
++
++    # Корень «давност» ловит все падежи («о пропуске срока исковой
++    # давности», «давност»); точные фразы падежами разъезжались.
++    if "давност" in statement_text and "давност" not in draft_text:
++        source = _find_statement("давност")
++        report.issues.append(
++            Issue(
++                type=IssueType.STATEMENT_LIMITATION,
++                severity=Severity.HIGH,
++                text=(source.text[:200] if source else ""),
++                reason=(
++                    "в материалах заявление о пропуске срока исковой "
++                    "давности, а проект его не разрешает — суд применяет "
++                    "давность только по заявлению стороны (ст. 199 ГК РФ, "
++                    "ч. 2 ст. 196, п. 3 ст. 199 ГПК РФ)"
++                ),
++            )
++        )
++
++    # Снижение неустойки: корни «сниж»/«уменьш» плюс прямая ссылка на
++    # ст. 333 ГК. Самого слова «неустойка» мало — ответчик может жаловаться
++    # на размер долга, не прося снижения.
++    reduction_requested = "неустойк" in statement_text and (
++        "сниж" in statement_text
++        or "уменьш" in statement_text
++        or "333" in statement_text
++    )
++    if reduction_requested and "неустойк" not in draft_text and "333" not in draft_text:
++        source = _find_statement("сниж", "уменьш", "333")
++        report.issues.append(
++            Issue(
++                type=IssueType.STATEMENT_PENALTY_REDUCTION,
++                severity=Severity.HIGH,
++                text=(source.text[:200] if source else ""),
++                reason=(
++                    "в материалах заявление о снижении неустойки, а проект "
++                    "о нём не упоминает — суд снижает неустойку только по "
++                    "заявлению стороны (ст. 333 ГК РФ)"
++                ),
++            )
++        )
++
+     # ── Таблица «обстоятельство — доказательства» ──────────────────
+     # Считается по материалам, а не по проекту: она отвечает на вопрос,
+     # откуда взято каждое обстоятельство, и её нельзя подделать текстом
+diff --git a/backend/tests/test_statements.py b/backend/tests/test_statements.py
+new file mode 100644
+index 0000000..ae7a80f
+--- /dev/null
++++ b/backend/tests/test_statements.py
+@@ -0,0 +1,108 @@
++"""Заявления, меняющие исход (п. 76 разбора, ст. 199 ГК и ст. 333 ГК)."""
++
++from app.agents.draft_agent import SectionDraft
++from app.agents.evidence_pack import EvidenceItem, EvidencePack
++from app.verification.engine import IssueType, verify_draft
++
++
++def _pack(objection_text: str) -> EvidencePack:
++    pack = EvidencePack(case_number="T-0001")
++    pack.items.append(
++        EvidenceItem(
++            category="objections",
++            text=objection_text,
++            source_document="02_response.txt",
++            source_type="RESPONSE",
++            order=1,
++        )
++    )
++    return pack
++
++
++def _draft(text: str):
++    draft_stub = type("D", (), {})()
++    draft_stub.sections = [
++        SectionDraft(key="operative", name="Резолютивная часть", text=text, is_mock=False)
++    ]
++    return draft_stub
++
++
++class TestLimitationStatement:
++    def test_limitation_in_materials_draft_silent_flagged(self) -> None:
++        pack = _pack("Ответчик заявляет о пропуске срока исковой давности.")
++        report = verify_draft(_draft("Взыскать 150 000 руб."), pack)
++        flagged = [i for i in report.issues if i.type is IssueType.STATEMENT_LIMITATION]
++        assert flagged
++        assert flagged[0].severity.value == "HIGH"
++
++    def test_limitation_addressed_not_flagged(self) -> None:
++        pack = _pack("Ответчик ссылается на пропуск срока исковой давности.")
++        report = verify_draft(
++            _draft("Срок исковой давности не пропущен: обязательство подтверждено."),
++            pack,
++        )
++        flagged = [i for i in report.issues if i.type is IssueType.STATEMENT_LIMITATION]
++        assert not flagged
++
++    def test_no_limitation_statement_silent(self) -> None:
++        pack = _pack("Ответчик возражает против удовлетворения иска по существу.")
++        report = verify_draft(_draft("Взыскать 150 000 руб."), pack)
++        flagged = [i for i in report.issues if i.type is IssueType.STATEMENT_LIMITATION]
++        assert not flagged
++
++
++class TestPenaltyReductionStatement:
++    def test_reduction_in_materials_draft_silent_flagged(self) -> None:
++        pack = _pack("Ответчик просит снизить неустойку на основании ст. 333 ГК РФ.")
++        report = verify_draft(_draft("Взыскать 150 000 руб."), pack)
++        flagged = [
++            i for i in report.issues if i.type is IssueType.STATEMENT_PENALTY_REDUCTION
++        ]
++        assert flagged
++
++    def test_reduction_addressed_not_flagged(self) -> None:
++        pack = _pack("Ответчик ходатайствует о снижении неустойки (ст. 333 ГК).")
++        report = verify_draft(
++            _draft("Оснований для снижения неустойки по ст. 333 ГК РФ не установлено."),
++            pack,
++        )
++        flagged = [
++            i for i in report.issues if i.type is IssueType.STATEMENT_PENALTY_REDUCTION
++        ]
++        assert not flagged
++
++    def test_no_reduction_statement_silent(self) -> None:
++        pack = _pack("Ответчик не согласен с размером долга.")
++        report = verify_draft(_draft("Взыскать 150 000 руб."), pack)
++        flagged = [
++            i for i in report.issues if i.type is IssueType.STATEMENT_PENALTY_REDUCTION
++        ]
++        assert not flagged
++
++
++class TestSplitMarkers:
++    def test_marker_across_fragments_no_crash(self) -> None:
++        # Маркер собран из разных фрагментов: «пропуск срока» в одном,
++        # «исковой давности» в другом. Выбор источника не должен падать.
++        pack = EvidencePack(case_number="T-0002")
++        pack.items.append(
++            EvidenceItem(
++                category="objections",
++                text="Ответчик заявляет о пропуске срока.",
++                source_document="02a.txt",
++                source_type="RESPONSE",
++                order=1,
++            )
++        )
++        pack.items.append(
++            EvidenceItem(
++                category="protocol_findings",
++                text="В протоколе заявление о давности зафиксировано.",
++                source_document="05.txt",
++                source_type="PROTOCOL",
++                order=2,
++            )
++        )
++        report = verify_draft(_draft("Взыскать 150 000 руб."), pack)
++        flagged = [i for i in report.issues if i.type is IssueType.STATEMENT_LIMITATION]
++        assert flagged
+-- 
+2.53.0.windows.2
+

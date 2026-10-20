@@ -1,0 +1,336 @@
+From 4624b6697c1266fc70528815649a979385b43db6 Mon Sep 17 00:00:00 2001
+From: Eagle1man <orel198611@gmail.com>
+Date: Tue, 20 Oct 2026 16:01:01 +0300
+Subject: [PATCH 14/20] =?UTF-8?q?=D0=9A=D0=B2=D0=B0=D0=BB=D0=B8=D1=84?=
+ =?UTF-8?q?=D0=B8=D0=BA=D0=B0=D1=86=D0=B8=D1=8F=20=D0=B4=D0=BE=D0=B3=D0=BE?=
+ =?UTF-8?q?=D0=B2=D0=BE=D1=80=D0=B0=20=D0=B8=20=D0=BF=D0=BE=D0=B4=D0=B2?=
+ =?UTF-8?q?=D0=B5=D0=B4=D0=BE=D0=BC=D1=81=D1=82=D0=B2=D0=B5=D0=BD=D0=BD?=
+ =?UTF-8?q?=D0=BE=D1=81=D1=82=D1=8C=20-=20=D0=B2=D0=BE=D0=BF=D1=80=D0=BE?=
+ =?UTF-8?q?=D1=81=20=D1=81=D1=83=D0=B4=D1=8C=D0=B5=20(=D0=BF.=203-4)?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+- app/verification/qualification.py: система не решает за судью, а
+  выносит вопрос. Поставка + истец физлицо без ИП -> вопрос о
+  квалификации (ст. 506, 454, 486 ГК); ИП + организация ->
+  вопрос об арбитраже (ст. 27, 28 АПК, ч. 2.1 ст. 33 ГПК)
+- маркеры по корням, 'ип' внутри слова не считается ИП
+- нет признака - проверка молчит
+- 7 тестов
+
+633 passed, ruff clean, mypy --strict clean
+---
+ backend/app/verification/engine.py        |  32 ++++++
+ backend/app/verification/qualification.py | 126 ++++++++++++++++++++++
+ backend/tests/test_qualification.py       | 108 +++++++++++++++++++
+ 3 files changed, 266 insertions(+)
+ create mode 100644 backend/app/verification/qualification.py
+ create mode 100644 backend/tests/test_qualification.py
+
+diff --git a/backend/app/verification/engine.py b/backend/app/verification/engine.py
+index 5c1f05e..3fa50f7 100644
+--- a/backend/app/verification/engine.py
++++ b/backend/app/verification/engine.py
+@@ -31,6 +31,7 @@ from app.drafting.requirements import extract_requirements
+ from app.verification.jurisdiction import check_jurisdiction
+ from app.verification.laws import LawRegistry, extract_fee, fee_matches, state_fee
+ from app.verification.persons import check_section
++from app.verification.qualification import check_qualification
+ from app.verification.subject_of_proof import ProofFact, subject_of_proof
+ 
+ 
+@@ -49,6 +50,8 @@ class IssueType(StrEnum):
+     CONTRADICTION = "CONTRADICTION"
+     INCOMPLETE = "INCOMPLETE"
+     JURISDICTION_MISMATCH = "JURISDICTION_MISMATCH"
++    CONTRACT_QUALIFICATION = "CONTRACT_QUALIFICATION"
++    ARBITRATION_JURISDICTION = "ARBITRATION_JURISDICTION"
+     OBJECTIONS_UNADDRESSED = "OBJECTIONS_UNADDRESSED"
+     PRETRIAL_UNADDRESSED = "PRETRIAL_UNADDRESSED"
+     FEE_IN_CLAIM_PRICE = "FEE_IN_CLAIM_PRICE"
+@@ -383,6 +386,35 @@ def verify_draft(
+             )
+         )
+ 
++    # Вопросы о квалификации договора и подведомственности (п. 3–4).
++    # Система не решает, принадлежит ли спор арбитражу, но и не молчит:
++    # признаки поставки, ИП и организации есть в материалах — вопрос
++    # выносится судье наружу, а не остаётся внутри пакета.
++    def _side_by_role(role: str) -> str:
++        marker = f" ({role})"
++        for entry in pack.participants:
++            if entry.endswith(marker):
++                return entry[: -len(marker)]
++        return ""
++
++    for qual_finding in check_qualification(
++        [item.text for item in pack.items],
++        plaintiff=_side_by_role("истец"),
++        defendant=_side_by_role("ответчик"),
++    ):
++        report.issues.append(
++            Issue(
++                type=(
++                    IssueType.ARBITRATION_JURISDICTION
++                    if qual_finding.kind == "arbitration"
++                    else IssueType.CONTRACT_QUALIFICATION
++                ),
++                severity=Severity.MEDIUM,
++                text="",
++                reason=qual_finding.reason,
++            )
++        )
++
+     for section in draft.sections:
+         text = section.text
+ 
+diff --git a/backend/app/verification/qualification.py b/backend/app/verification/qualification.py
+new file mode 100644
+index 0000000..3c172bd
+--- /dev/null
++++ b/backend/app/verification/qualification.py
+@@ -0,0 +1,126 @@
++"""Вопросы о квалификации договора и подведомственности (п. 3–4 разбора).
++
++Система не решает за судью, принадлежит ли спор арбитражу и как
++квалифицировать договор. Но она обязана вынести вопрос наружу, а не
++пропустить его молча. Рецензент поймал два случая, когда этого не было:
++
++* договор поставки, а истец указан физическим лицом. Поставщиком по
++  ст. 506 ГК РФ может быть предприниматель, поэтому без признака ИП
++  отношения могут оказаться куплей-продажей (ст. 454, 486 ГК РФ);
++* истец — ИП, ответчик — организация. Тогда спор из договора поставки
++  подсуден арбитражному суду (ст. 27, 28 АПК РФ), и суд общей
++  юрисдикции должен передать дело (ч. 2.1 ст. 33 ГПК РФ).
++
++Обе проверки ищут признаки в текстах материалов и в участниках дела.
++Нет признака — проверка молчит: отсутствие слова не повод задавать
++вопрос. Сами выводы не делаются — формулируется вопрос судье.
++"""
++
++from __future__ import annotations
++
++import re
++from dataclasses import dataclass
++
++#: Договор поставки. «Поставщик» и «поставки» рядом с договором —
++#: тот же признак, что и слово «поставка» в заголовке.
++_SUPPLY_RE = re.compile(r"поставк|поставщик|поставки", re.IGNORECASE)
++
++#: Признак ИП. Отдельно «ИП» как самостоятельное слово: подстрока «ип»
++#: встречается в «заявитель», «писание» и ломала бы проверку.
++_IP_RE = re.compile(
++    r"индивидуальн\w*\s+предпринимател\w*|\bИП\b|\bИ\.П\.",
++    re.IGNORECASE,
++)
++
++#: ООО, ЗАО, АО и прочие организационные формы ответчика.
++_ORG_RE = re.compile(
++    r"\bООО\b|\bЗАО\b|\bОАО\b|\bАО\b|\bПАО\b|компани|корпорац",
++    re.IGNORECASE,
++)
++
++#: Физическое лицо прямо названо таковым.
++_NATURAL_RE = re.compile(r"физическ\w*\s+лиц\w*|гражданин|гражданк", re.IGNORECASE)
++
++#: Фамилия Имя Отчество подряд — признак физлица в участниках дела.
++_FULL_NAME_RE = re.compile(
++    r"[А-ЯЁ][а-яё]{2,}\s+[А-ЯЁ][а-яё]{2,}(?:\s+[А-ЯЁ][а-яё]{2,})?"
++)
++
++
++@dataclass(frozen=True)
++class QualificationFinding:
++    """Вопрос, который судья должен разрешить до существа спора."""
++
++    kind: str  # "qualification" | "arbitration"
++    reason: str  # готовый текст вопроса
++
++
++def _has_supply(texts: list[str]) -> bool:
++    return any(_SUPPLY_RE.search(text) for text in texts)
++
++
++def _plaintiff_is_natural(plaintiff: str, texts: list[str]) -> bool:
++    """Истец — физическое лицо без признака ИП.
++
++    Проверяется и по самому имени участника (ФИО), и по текстам:
++    «физическое лицо» в иске надёжнее, чем форма имени.
++    """
++    if not plaintiff:
++        return False
++    if _IP_RE.search(plaintiff):
++        return False
++    if _ORG_RE.search(plaintiff):
++        return False
++    return bool(_FULL_NAME_RE.match(plaintiff.strip())) or any(
++        _NATURAL_RE.search(text) for text in texts
++    )
++
++
++def check_qualification(
++    texts: list[str], plaintiff: str = "", defendant: str = ""
++) -> list[QualificationFinding]:
++    """Сформулировать вопросы о квалификации и подведомственности.
++
++    Возвращает пусто, когда по материалам не из чего строить вопрос:
++    спор не о поставке, или истец — организация, или ИП подтверждён.
++    """
++    if not _has_supply(texts):
++        return []
++
++    findings: list[QualificationFinding] = []
++    ip_marked = any(_IP_RE.search(text) for text in texts) or _IP_RE.search(
++        plaintiff or ""
++    )
++    defendant_is_org = bool(defendant and _ORG_RE.search(defendant)) or any(
++        _ORG_RE.search(text) for text in texts
++    )
++
++    if not ip_marked and _plaintiff_is_natural(plaintiff, texts):
++        findings.append(
++            QualificationFinding(
++                kind="qualification",
++                reason=(
++                    "договор поставки, но истец указан физическим лицом без "
++                    "признака индивидуального предпринимателя: уточнить, "
++                    "является ли истец ИП; если нет, отношения могут "
++                    "квалифицироваться как купля-продажа (ст. 506, 454, "
++                    "486 ГК РФ)"
++                ),
++            )
++        )
++
++    if ip_marked and defendant_is_org:
++        findings.append(
++            QualificationFinding(
++                kind="arbitration",
++                reason=(
++                    "истец — ИП, ответчик — организация, спор из договора "
++                    "поставки: подведомственность арбитражного суда "
++                    "(ст. 27, 28 АПК РФ); при общей юрисдикции дело "
++                    "подлежит передаче по подсудности (ч. 2.1 ст. 33 ГПК "
++                    "РФ)"
++                ),
++            )
++        )
++
++    return findings
+diff --git a/backend/tests/test_qualification.py b/backend/tests/test_qualification.py
+new file mode 100644
+index 0000000..d74dbb2
+--- /dev/null
++++ b/backend/tests/test_qualification.py
+@@ -0,0 +1,108 @@
++"""Квалификация договора и подведомственность (п. 3–4 разбора)."""
++
++from app.agents.draft_agent import SectionDraft
++from app.agents.evidence_pack import EvidenceItem, EvidencePack
++from app.verification.engine import IssueType, verify_draft
++from app.verification.qualification import check_qualification
++
++
++def _texts(*parts: str) -> list[str]:
++    return list(parts)
++
++
++class TestQualification:
++    def test_supply_natural_person_flags_qualification(self) -> None:
++        findings = check_qualification(
++            _texts("Договор поставки № 12 от 15.03.2026."),
++            plaintiff="Образцов Пётр Петрович",
++            defendant="ООО «Фирма-Трейд»",
++        )
++        kinds = [f.kind for f in findings]
++        assert "qualification" in kinds
++        q = next(f for f in findings if f.kind == "qualification")
++        assert "ст. 506" in q.reason and "купля-продажа" in q.reason
++
++    def test_ip_marked_no_qualification_flag(self) -> None:
++        findings = check_qualification(
++            _texts("Договор поставки. Истец — индивидуальный предприниматель."),
++            plaintiff="Образцов Пётр Петрович",
++            defendant="ООО «Фирма»",
++        )
++        assert all(f.kind != "qualification" for f in findings)
++
++    def test_ip_and_org_flags_arbitration(self) -> None:
++        findings = check_qualification(
++            _texts("Договор поставки, поставщик — ИП Сидоров."),
++            plaintiff="ИП Сидоров",
++            defendant="ООО «Фирма»",
++        )
++        kinds = [f.kind for f in findings]
++        assert "arbitration" in kinds
++        a = next(f for f in findings if f.kind == "arbitration")
++        assert "27, 28 АПК" in a.reason and "33 ГПК" in a.reason
++
++    def test_not_supply_silent(self) -> None:
++        findings = check_qualification(
++            _texts("Договор оказания услуг."),
++            plaintiff="Образцов Пётр Петрович",
++            defendant="ООО «Фирма»",
++        )
++        assert findings == []
++
++    def test_org_plaintiff_silent(self) -> None:
++        findings = check_qualification(
++            _texts("Договор поставки."),
++            plaintiff="ООО «Истец»",
++            defendant="ООО «Фирма»",
++        )
++        # Истец — организация, признака ИП нет: вопрос о квалификации
++        # не строится, об арбитраже тоже (нет ИП).
++        assert findings == []
++
++    def test_no_false_positive_on_ip_substring(self) -> None:
++        # «заявитель», «писание» содержат «ип», но это не ИП.
++        findings = check_qualification(
++            _texts("Договор поставки. Заявитель просит, писание не ведётся."),
++            plaintiff="Образцов Пётр Петрович",
++            defendant="ООО «Фирма»",
++        )
++        kinds = [f.kind for f in findings]
++        assert "arbitration" not in kinds
++
++
++class TestQualificationInReport:
++    def _pack(self, contract_text: str, plaintiff: str, defendant: str) -> EvidencePack:
++        pack = EvidencePack(case_number="T-0001")
++        pack.participants.append(f"{plaintiff} (истец)")
++        pack.participants.append(f"{defendant} (ответчик)")
++        pack.items.append(
++            EvidenceItem(
++                category="evidence",
++                text=contract_text,
++                source_document="03_contract.txt",
++                source_type="CONTRACT",
++                order=1,
++            )
++        )
++        return pack
++
++    def _draft(self):
++        draft_stub = type("D", (), {})()
++        draft_stub.sections = [
++            SectionDraft(
++                key="operative",
++                name="Резолютивная часть",
++                text="Взыскать 150 000 руб.",
++                is_mock=False,
++            )
++        ]
++        return draft_stub
++
++    def test_qualification_reaches_report(self) -> None:
++        pack = self._pack(
++            "Договор поставки № 1.", "Образцов Пётр Петрович", "ООО «Фирма»"
++        )
++        report = verify_draft(self._draft(), pack)
++        flagged = [i for i in report.issues if i.type is IssueType.CONTRACT_QUALIFICATION]
++        assert flagged
++        assert flagged[0].severity.value == "MEDIUM"
+-- 
+2.53.0.windows.2
+

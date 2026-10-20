@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ИИ помощник судьи — проект судебного решения</title>
+<!--
+  Метка версии в ссылках на файлы обязательна.
+
+  Без неё браузер показывает прошлую копию интерфейса: файл правится,
+  сервер отдаёт новый с новым ETag, а страница открывается со старым
+  app.js. На демонстрации заказчику это выглядит как «правка не
+  работает». При смене версии приложения метка меняется здесь же —
+  иначе статику придётся чистить вручную у каждого зрителя.
+-->
+<link rel="stylesheet" href="styles.css?v=0.1.0">
+</head>
+<body>
+
+<!--
+  Интерфейс помощника судьи.
+
+  Главное правило продукта вынесено в шапку и повторяется у каждого блока
+  с текстом акта: система готовит ПРОЕКТ, решение принимает человек.
+  Это не украшение — без повторного напоминания текст модели легко принять
+  за готовый акт.
+-->
+
+<header class="top">
+  <div class="wrap">
+    <div class="brand">
+      <span class="mark">⚖</span>
+      <div>
+        <h1>ИИ помощник судьи</h1>
+        <p class="sub">Подготовка проекта судебного решения по материалам дела</p>
+      </div>
+    </div>
+    <div class="status" id="health">проверка связи…</div>
+  </div>
+</header>
+
+<div class="notice demo-banner" id="demo-banner" hidden></div>
+
+<div class="notice" id="disclaimer">
+  <strong>Это проект, а не решение суда.</strong>
+  Проверка и принятие решения — за судьёй. Любое утверждение без ссылки
+  на материалы дела помечено как требующее проверки.
+</div>
+
+<main class="wrap layout">
+
+  <!-- ── Список дел ─────────────────────────────────────── -->
+  <aside class="panel">
+    <h2>Дела</h2>
+    <button class="btn primary full" id="btn-new-case">Создать демо-дело</button>
+    <ul class="case-list" id="case-list">
+      <li class="muted">Загрузка…</li>
+    </ul>
+
+    <h2 class="mt">Материалы дела</h2>
+    <ul class="doc-list" id="doc-list">
+      <li class="muted">Дело не выбрано</li>
+    </ul>
+  </aside>
+
+  <!-- ── Проект ─────────────────────────────────────────── -->
+  <section class="panel main">
+
+    <div class="head-row">
+      <div>
+        <h2 id="draft-title">Проект не сформирован</h2>
+        <p class="muted" id="draft-meta">Выберите дело и нажмите «Сформировать проект».</p>
+      </div>
+      <button class="btn primary" id="btn-generate" disabled>
+        Сформировать проект
+      </button>
+    </div>
+
+    <div class="progress" id="progress" hidden>
+      <div class="bar"><div class="fill" id="progress-fill"></div></div>
+      <p class="muted" id="progress-text">Формирование…</p>
+    </div>
+
+    <div class="alert" id="alert" hidden></div>
+
+    <!-- Результат проверки: вердикт и счётчики. Список замечаний
+         рисуется внутри разделов, к которым они относятся — замечание
+         читается рядом с абзацем. -->
+    <div class="verification" id="verification" hidden>
+      <h3>Проверка проекта</h3>
+      <div class="verdict" id="verdict"></div>
+    </div>
+
+    <!-- Разделы проекта -->
+    <div class="sections" id="sections">
+      <p class="muted">Разделы проекта появятся здесь.</p>
+    </div>
+
+    <!-- Источники -->
+    <details class="sources" id="sources" hidden>
+      <summary>Источники, использованные в проекте</summary>
+      <ul id="source-list"></ul>
+    </details>
+
+    <!-- Версии -->
+    <details class="versions" id="versions" hidden>
+      <summary>История версий</summary>
+      <ul id="version-list"></ul>
+      <p class="muted small">
+        История версий — рабочие материалы проекта: хранится каждая
+        редакция целиком с автором правки. Режим доступа к этой истории
+        и сроки хранения должны быть определены регламентом суда —
+        вопрос правовой квалификации, см. docs/legal-regime.md.
+      </p>
+    </details>
+
+    <!-- Правка -->
+    <details class="editor" id="editor" hidden>
+      <summary>Внести правку вручную</summary>
+      <p class="muted small">
+        Текст сохраняется целиком как новая версия. Предыдущая версия
+        остаётся без изменений — так юридический акт можно показать
+        в том виде, в каком он был принят.
+      </p>
+      <select id="edit-author">
+        <option value="secretary">Правку внёс секретарь</option>
+        <option value="judge">Правку внёс судья</option>
+      </select>
+      <input type="text" id="edit-comment" placeholder="Комментарий к правке">
+      <textarea id="edit-text" rows="10"></textarea>
+      <button class="btn" id="btn-save-edit">Сохранить как новую версию</button>
+    </details>
+
+  </section>
+</main>
+
+<footer class="wrap foot">
+  Все данные и модели работают локально. Материалы дела не покидают компьютер.
+</footer>
+
+<script src="app.js?v=0.1.0"></script>
+</body>
+</html>

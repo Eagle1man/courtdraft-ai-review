@@ -1,0 +1,286 @@
+From 711cf680d02c02e50d68184bd39e2c76ea7fc237 Mon Sep 17 00:00:00 2001
+From: Eagle1man <orel198611@gmail.com>
+Date: Mon, 19 Oct 2026 18:26:06 +0300
+Subject: [PATCH 02/20] =?UTF-8?q?=D0=9F=D0=BE=D1=88=D0=BB=D0=B8=D0=BD?=
+ =?UTF-8?q?=D0=B0=20=D0=BF=D0=BE=20=D0=B4=D0=B0=D1=82=D0=B5=20=D0=B4=D0=B5?=
+ =?UTF-8?q?=D0=BB=D0=B0=20+=20=D0=BF=D0=BE=D0=B7=D0=B8=D1=86=D0=B8=D1=8F?=
+ =?UTF-8?q?=20=D0=BE=D1=82=D0=B2=D0=B5=D1=82=D1=87=D0=B8=D0=BA=D0=B0?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+- engine.py: дата из материалов ('5 марта 2020 года') выбирает редакцию
+  тарифа ст. 333.19: архивные дела считают по прежней редакции, без
+  дат - по действующей; расхождение печатает обе суммы
+- engine.py: в деле есть возражения ответчика, а в проекте нет ни
+  одного довода (OBJECTIONS_UNADDRESSED, HIGH) - ст. 12, ч. 3-4
+  ст. 198 ГПК РФ; это п. 6 и 11.5 рецензента
+
+590 passed, ruff clean, mypy --strict clean
+---
+ backend/app/verification/engine.py | 77 ++++++++++++++++++++++++++++--
+ backend/tests/test_laws.py         | 48 +++++++++++++++++++
+ backend/tests/test_objections.py   | 66 +++++++++++++++++++++++++
+ 3 files changed, 186 insertions(+), 5 deletions(-)
+ create mode 100644 backend/tests/test_objections.py
+
+diff --git a/backend/app/verification/engine.py b/backend/app/verification/engine.py
+index 06ab6ac..d308629 100644
+--- a/backend/app/verification/engine.py
++++ b/backend/app/verification/engine.py
+@@ -19,11 +19,12 @@ from __future__ import annotations
+ 
+ import re
+ from dataclasses import dataclass, field
++from datetime import date
+ from enum import StrEnum
+ from pathlib import Path
+ 
+ from app.agents.draft_agent import NEEDS_REVIEW, DraftResult
+-from app.agents.evidence_pack import EvidencePack
++from app.agents.evidence_pack import MONTHS, EvidencePack
+ from app.config import Settings
+ from app.drafting.operative import DEFAULT_LEGAL_BASIS
+ from app.drafting.requirements import extract_requirements
+@@ -47,6 +48,7 @@ class IssueType(StrEnum):
+     CONTRADICTION = "CONTRADICTION"
+     INCOMPLETE = "INCOMPLETE"
+     JURISDICTION_MISMATCH = "JURISDICTION_MISMATCH"
++    OBJECTIONS_UNADDRESSED = "OBJECTIONS_UNADDRESSED"
+ 
+ 
+ class Severity(StrEnum):
+@@ -167,6 +169,35 @@ def _numbers_in(text: str) -> set[str]:
+     return out
+ 
+ 
++_MONTH_INDEX: dict[str, int] = {name: i + 1 for i, name in enumerate(MONTHS)}
++
++
++def _case_date(dates: list[str]) -> date | None:
++    """Дата, ближайшая к обращению в суд.
++
++    pack.dates хранит формат «5 марта 2013 года», из которого понятно
++    только слово и число. Редакция госпошлины выбирается по дате
++    обращения в суд, а не по сегодняшнему дню: реальные дела корпуса —
++    2012–2013 годов, и нынешний тариф к ним неприменим. Из дат
++    материалов берётся самая ранняя — дата иска обычно раньше всех
++    остальных дат дела, и это лучшая доступная оценка, а не решение
++    о дате обращения.
++    """
++    parsed: list[date] = []
++    for raw in dates:
++        m = re.match(r"(\d{1,2})\s+(\S+)\s+(\d{4})", str(raw))
++        if m is None:
++            continue
++        month = _MONTH_INDEX.get(m.group(2))
++        if month is None:
++            continue
++        try:
++            parsed.append(date(int(m.group(3)), month, int(m.group(1))))
++        except ValueError:
++            continue
++    return min(parsed) if parsed else None
++
++
+ def _laws_in(text: str) -> set[tuple[str, str]]:
+     """Найти ссылки на нормы в виде (статья, кодекс).
+ 
+@@ -451,10 +482,19 @@ def verify_draft(
+         # ── 4b. Госпошлина против расчётной ──────────────────────
+         # Пошлину система берёт из материалов дела, а она там может быть
+         # указана неверно. По НК РФ (ст. 333.19) размер пошлины считается
+-        # от цены иска, и расхождение — повод показать судье оба числа.
++        # от цены иска по редакции, действовавшей на дату обращения,
++        # и расхождение — повод показать судье оба числа.
+         if "резолютив" in section.name.lower():
+             stated = extract_fee(text)
+-            if stated is not None and not fee_matches(claim_total, stated):
++            fee_date = _case_date(pack.dates)
++            if stated is not None and not fee_matches(
++                claim_total, stated, on=fee_date
++            ):
++                edition = (
++                    f"по редакции, действовавшей на {fee_date:%d.%m.%Y}"
++                    if fee_date
++                    else "по действующей редакции"
++                )
+                 report.issues.append(
+                     Issue(
+                         type=IssueType.UNSUPPORTED_CLAIM,
+@@ -462,8 +502,9 @@ def verify_draft(
+                         text=text[:200],
+                         reason=(
+                             f"госпошлина {stated:.2f} руб. не совпадает с "
+-                            f"расчётной по цене иска {claim_total:.2f} руб.: "
+-                            f"{state_fee(claim_total):.2f} руб. (НК РФ, ст. 333.19)"
++                            f"расчётной по цене иска {claim_total:.2f} руб. "
++                            f"{edition}: {state_fee(claim_total, fee_date):.2f} "
++                            "руб. (НК РФ, ст. 333.19)"
+                         ),
+                         section=section.name,
+                     )
+@@ -508,6 +549,32 @@ def verify_draft(
+                 )
+             )
+ 
++    # ── Позиция ответчика (ст. 12, ч. 3–4 ст. 198 ГПК РФ) ──────────
++    # Возражения в деле есть, а в проекте нет ни одного довода — это
++    # нарушение состязательности, по которому в реальном процессе
++    # решение отменяют. Замечание ставится один раз на весь проект,
++    # а не на раздел: обсуждать возражения можно в любом разделе.
++    objection_texts = [i.text for i in pack.items if i.category == "objections"]
++    if objection_texts:
++        draft_text = "\n".join(s.text for s in draft.sections).lower()
++        markers = (
++            "довод", "возраж", "отклон", "не согласн", "оспор",
++            "приняты во внимание", "подтверждаются материалами",
++        )
++        if not any(marker in draft_text for marker in markers):
++            report.issues.append(
++                Issue(
++                    type=IssueType.OBJECTIONS_UNADDRESSED,
++                    severity=Severity.HIGH,
++                    text=objection_texts[0][:200],
++                    reason=(
++                        "в материалах дела есть возражения ответчика, "
++                        "но проект не отвечает ни на один довод "
++                        "(ст. 12, ч. 3–4 ст. 198 ГПК РФ)"
++                    ),
++                )
++            )
++
+     # ── Итоговый статус ────────────────────────────────────────────
+     critical = [i for i in report.issues if i.severity is Severity.CRITICAL]
+     if critical or report.issues:
+diff --git a/backend/tests/test_laws.py b/backend/tests/test_laws.py
+index ab38e18..d229b66 100644
+--- a/backend/tests/test_laws.py
++++ b/backend/tests/test_laws.py
+@@ -201,3 +201,51 @@ class TestFeeCheck:
+         assert extract_fee("пошлину в размере 5 100 руб.") == 5100
+         assert extract_fee("пошлина 4 700 руб. 00 коп.") == 4700
+         assert extract_fee("без пошлины") is None
++
++    def _dated_pack(self, date_str: str, fee_text: str):
++        pack = make_pack(
++            "Взыскать задолженность по договору в размере 150 000 руб. 00 коп."
++        )
++        pack.dates = [date_str] if date_str else []
++        draft = self._draft(fee_text)
++        return draft, pack
++
++    def test_archive_date_uses_old_tariff(self) -> None:
++        # Материалы датируют дело 2020 годом: расчётная пошлина 4 200
++        # по прежней редакции. Указано 5 500 (новый тариф) — расхождение.
++        draft, pack = self._dated_pack(
++            "5 марта 2020 года",
++            "Взыскать с ответчика государственную пошлину "
++            "в размере 5 500 руб. (ст. 98 ГПК РФ).",
++        )
++        report = verify_draft(draft, pack, settings=settings())
++        fee_issues = [
++            i for i in report.issues if "расчётной" in i.reason and "2020" in i.reason
++        ]
++        assert fee_issues
++
++    def test_archive_date_old_fee_not_flagged(self) -> None:
++        # Дело 2020 года, пошлина 4 200 — верная по прежней редакции.
++        draft, pack = self._dated_pack(
++            "5 марта 2020 года",
++            "Взыскать с ответчика государственную пошлину "
++            "в размере 4 200 руб. (ст. 98 ГПК РФ).",
++        )
++        report = verify_draft(draft, pack, settings=settings())
++        fee_issues = [
++            i for i in report.issues
++            if "расчётной" in i.reason and "пошлин" in i.reason
++        ]
++        assert not fee_issues
++
++    def test_no_date_current_tariff_still_applies(self) -> None:
++        # Даты в материалах нет — считаем по действующей редакции:
++        # при цене иска 150 000 расчётные 5 500, а в проекте 6 500.
++        draft, pack = self._dated_pack(
++            "",
++            "Взыскать с ответчика государственную пошлину "
++            "в размере 6 500 руб. (ст. 98 ГПК РФ).",
++        )
++        report = verify_draft(draft, pack, settings=settings())
++        fee_issues = [i for i in report.issues if "расчётной" in i.reason]
++        assert fee_issues
+diff --git a/backend/tests/test_objections.py b/backend/tests/test_objections.py
+new file mode 100644
+index 0000000..cc13b10
+--- /dev/null
++++ b/backend/tests/test_objections.py
+@@ -0,0 +1,66 @@
++"""Проверка отражения позиции ответчика (п. 6, 11.5 разбора)."""
++
++from app.agents.draft_agent import SectionDraft
++from app.agents.evidence_pack import EvidenceItem, EvidencePack
++from app.verification.engine import IssueType, verify_draft
++
++
++def _pack(with_objections: bool) -> EvidencePack:
++    pack = EvidencePack(case_number="T-0001")
++    pack.items.append(
++        EvidenceItem(
++            category="claims",
++            text="Взыскать задолженность по договору в размере 150 000 руб. 00 коп.",
++            source_document="01_claim.txt",
++            source_type="CLAIM",
++            order=1,
++        )
++    )
++    if with_objections:
++        pack.items.append(
++            EvidenceItem(
++                category="objections",
++                text="Ответчик просит отказать в иске: услуги не оказаны.",
++                source_document="02_response.txt",
++                source_type="RESPONSE",
++                order=2,
++            )
++        )
++    return pack
++
++
++def _draft(text: str):
++    draft_stub = type("D", (), {})()
++    draft_stub.sections = [
++        SectionDraft(key="operative", name="Резолютивная часть", text=text, is_mock=False)
++    ]
++    return draft_stub
++
++
++class TestObjections:
++    def test_objections_ignored_flagged(self) -> None:
++        report = verify_draft(
++            _draft("Взыскать с ответчика в пользу истца 150 000 руб."),
++            _pack(with_objections=True),
++        )
++        types = [i.type for i in report.issues]
++        assert IssueType.OBJECTIONS_UNADDRESSED in types
++
++    def test_objections_addressed_not_flagged(self) -> None:
++        report = verify_draft(
++            _draft(
++                "Доводы ответчика о неоказании услуг отклоняются, "
++                "поскольку подтверждаются материалами дела."
++            ),
++            _pack(with_objections=True),
++        )
++        flagged = [i for i in report.issues if i.type is IssueType.OBJECTIONS_UNADDRESSED]
++        assert not flagged
++
++    def test_no_objections_silent(self) -> None:
++        report = verify_draft(
++            _draft("Взыскать с ответчика в пользу истца 150 000 руб."),
++            _pack(with_objections=False),
++        )
++        flagged = [i for i in report.issues if i.type is IssueType.OBJECTIONS_UNADDRESSED]
++        assert not flagged
+-- 
+2.53.0.windows.2
+

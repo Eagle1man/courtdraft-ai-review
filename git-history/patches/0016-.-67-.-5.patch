@@ -1,0 +1,503 @@
+From 4de23e20bb9fdd469c17a73df3d642f94c535a34 Mon Sep 17 00:00:00 2001
+From: Eagle1man <orel198611@gmail.com>
+Date: Tue, 20 Oct 2026 17:39:09 +0300
+Subject: [PATCH 16/20] =?UTF-8?q?=D0=9E=D1=86=D0=B5=D0=BD=D0=BA=D0=B0=20?=
+ =?UTF-8?q?=D0=B4=D0=BE=D0=BA=D0=B0=D0=B7=D0=B0=D1=82=D0=B5=D0=BB=D1=8C?=
+ =?UTF-8?q?=D1=81=D1=82=D0=B2=20=D0=BF=D0=BE=20=D1=81=D1=82.=2067=20=D0=93?=
+ =?UTF-8?q?=D0=9F=D0=9A=20=D0=A0=D0=A4=20-=20=D1=82=D0=B0=D0=B1=D0=BB?=
+ =?UTF-8?q?=D0=B8=D1=86=D0=B0=20=D0=BA=D1=80=D0=B8=D1=82=D0=B5=D1=80=D0=B8?=
+ =?UTF-8?q?=D0=B5=D0=B2=20=D0=B8=20=D0=B2=D0=BE=D0=BF=D1=80=D0=BE=D1=81?=
+ =?UTF-8?q?=D1=8B=20=D1=81=D1=83=D0=B4=D1=8C=D0=B5=20(=D0=BF.=205)?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Рецензент: нет оценки относимости, допустимости, достоверности каждого доказательства и достаточности в совокупности; заключение эксперта принимается без оценки наравне с другими (ч. 3 ст. 86 ГПК РФ).\nСистема оценку не выносит - её выносит суд. Вместо этого: таблица, какие критерии нашлись в проекте (как предмет доказывания, корнями), и три вопроса наружу: позиция стороны, выданная за доказательство (HIGH, ст. 55 ГПК РФ), заключение эксперта без оценки (MEDIUM, ч. 3 ст. 86 ГПК РФ), ссылка на доказательства без оценки вообще (MEDIUM, ст. 67 ГПК РФ).\nОкно 30 символов и слово-исключение: «требования искового заявления подтверждаются расчётом» - подтверждается расчёт, а не заявление. Корень исков, а не исково - иначе «исковым» не берётся.
+---
+ backend/app/verification/engine.py            |  39 ++++
+ .../app/verification/evidence_assessment.py   | 186 ++++++++++++++++
+ backend/tests/test_evidence_assessment.py     | 201 ++++++++++++++++++
+ 3 files changed, 426 insertions(+)
+ create mode 100644 backend/app/verification/evidence_assessment.py
+ create mode 100644 backend/tests/test_evidence_assessment.py
+
+diff --git a/backend/app/verification/engine.py b/backend/app/verification/engine.py
+index 3fa50f7..2a3eaf9 100644
+--- a/backend/app/verification/engine.py
++++ b/backend/app/verification/engine.py
+@@ -28,6 +28,11 @@ from app.agents.evidence_pack import MONTHS, EvidenceItem, EvidencePack
+ from app.config import Settings
+ from app.drafting.operative import DEFAULT_LEGAL_BASIS
+ from app.drafting.requirements import extract_requirements
++from app.verification.evidence_assessment import (
++    AssessmentCriterion,
++    assessment_of,
++    check_evidence_assessment,
++)
+ from app.verification.jurisdiction import check_jurisdiction
+ from app.verification.laws import LawRegistry, extract_fee, fee_matches, state_fee
+ from app.verification.persons import check_section
+@@ -57,6 +62,9 @@ class IssueType(StrEnum):
+     FEE_IN_CLAIM_PRICE = "FEE_IN_CLAIM_PRICE"
+     STATEMENT_LIMITATION = "STATEMENT_LIMITATION"
+     STATEMENT_PENALTY_REDUCTION = "STATEMENT_PENALTY_REDUCTION"
++    EVIDENCE_NOT_ASSESSED = "EVIDENCE_NOT_ASSESSED"
++    PLEADING_AS_EVIDENCE = "PLEADING_AS_EVIDENCE"
++    EXPERT_UNASSESSED = "EXPERT_UNASSESSED"
+ 
+ 
+ class Severity(StrEnum):
+@@ -99,6 +107,9 @@ class VerificationReport:
+     # Это не замечание, а карта: судье виднее, что поставками считать,
+     # поэтому в статус проверки не входит.
+     facts: list[ProofFact] = field(default_factory=list)
++    # Критерии оценки доказательств (ст. 67 ГПК РФ), найденные в
++    # проекте. Тоже карта, а не замечание: оценку выносит суд.
++    assessment: list[AssessmentCriterion] = field(default_factory=list)
+ 
+     @property
+     def needs_review(self) -> bool:
+@@ -119,6 +130,7 @@ class VerificationReport:
+             "unsupported_claims": self.unsupported_claims,
+             "by_severity": self.by_severity(),
+             "subject_of_proof": [f.to_dict() for f in self.facts],
++            "evidence_assessment": [c.to_dict() for c in self.assessment],
+         }
+ 
+     def human_summary(self) -> str:
+@@ -794,6 +806,33 @@ def verify_draft(
+     # модели.
+     report.facts = subject_of_proof(pack.items)
+ 
++    # ── Оценка доказательств (п. 5, ст. 67 ГПК РФ) ─────────────────
++    # Суд оценивает каждое доказательство по относимости, допустимости
++    # и достоверности, а все в совокупности — по достаточности. Система
++    # оценку не выносит: она показывает, какие критерии нашлись в
++    # проекте, а какие нет, и выносит вопросы наружу — позицию стороны,
++    # выданную за доказательство, и заключение эксперта, принятое без
++    # оценки наравне с другими (ч. 3 ст. 86 ГПК РФ).
++    report.assessment = assessment_of(draft_text)
++
++    assessment_issues = {
++        "pleading_as_evidence": (IssueType.PLEADING_AS_EVIDENCE, Severity.HIGH),
++        "expert_unassessed": (IssueType.EXPERT_UNASSESSED, Severity.MEDIUM),
++        "not_assessed": (IssueType.EVIDENCE_NOT_ASSESSED, Severity.MEDIUM),
++    }
++    for assessment_finding in check_evidence_assessment(
++        draft_text, [item.text for item in pack.items]
++    ):
++        issue_type, severity = assessment_issues[assessment_finding.kind]
++        report.issues.append(
++            Issue(
++                type=issue_type,
++                severity=severity,
++                text=assessment_finding.evidence,
++                reason=assessment_finding.reason,
++            )
++        )
++
+     # ── Итоговый статус ────────────────────────────────────────────
+     critical = [i for i in report.issues if i.severity is Severity.CRITICAL]
+     if critical or report.issues:
+diff --git a/backend/app/verification/evidence_assessment.py b/backend/app/verification/evidence_assessment.py
+new file mode 100644
+index 0000000..97a9bed
+--- /dev/null
++++ b/backend/app/verification/evidence_assessment.py
+@@ -0,0 +1,186 @@
++"""Оценка доказательств по ст. 67 ГПК РФ (п. 5 разбора).
++
++Рецензент: «Нет оценки доказательств: относимость, допустимость,
++достоверность каждого доказательства и достаточность в совокупности.
++Заключение эксперта также оценивается наравне с другими
++доказательствами (ч. 3 ст. 86 ГПК РФ)». Раньше система показывала
++только покрытие предмета доказывания — чем подтверждается обстоятельство,
++— но не оценивало сами доказательства.
++
++Оценку по ст. 67 ГПК РФ выносит суд, а не программа, поэтому здесь
++две честные задачи:
++
++* таблица: какие критерии оценки нашлись в тексте проекта, а какие
++  нет — как предмет доказывания, только по критериям;
++* вопросы наружу: позиция стороны, выданная за доказательство, и
++  заключение эксперта, принятое без оценки наравне с другими
++  доказательствами.
++
++Маркеры — корни («относим», «достоверн»), а не точные фразы: падежные
++формы разъезжаются, корень покрывает их все. Нахождение корня в тексте
++означает «критерий упомянут», а не «доказательство оценено верно»:
++первая — работа скрипта, второе — работа судьи.
++"""
++
++from __future__ import annotations
++
++import re
++from dataclasses import dataclass
++
++#: Критерии оценки по ст. 67 ГПК РФ: три — по каждому доказательству,
++#: четвёртый — по совокупности. Порядок как в статье.
++CRITERIA: tuple[tuple[str, str], ...] = (
++    ("относимость", "относим"),
++    ("допустимость", "допустим"),
++    ("достоверность", "достоверн"),
++    ("достаточность в совокупности", "совокупн"),
++)
++
++#: Позиция стороны, выданная за доказательство: глагол о подтверждении
++#: рядом с исковым заявлением, отзывом, возражениями или жалобой.
++#: Объяснения сторон здесь не входят — они прямо отнесены к
++#: доказательствам ч. 1 ст. 55 ГПК РФ, а иск и отзыв остаются
++#: утверждениями стороны (ст. 55 ГПК РФ). Окно в 30 символов: шире —
++#: ловит «обстоятельства установлены судом по представленным
++#: доказательствам, исковое заявление принято», где заявление не
++#: подтверждает ничего.
++_PLEADING_RE = re.compile(
++    r"(?:подтвержд|доказыва|установл|свидетельству)\w*[^\n.]{0,30}"
++    r"(?:исков\w*\s+заявлен|отзыв|возражени|жалоб)"
++    r"|(?:исков\w*\s+заявлен|отзыв)[^\n.]{0,30}"
++    r"(?:подтвержд|доказыва|установл|свидетельству)",
++    re.IGNORECASE,
++)
++
++#: «требования искового заявления подтверждаются расчётом» —
++#: подтверждается расчёт, а не заявление: это верная фраза, и ловить
++#: её нельзя. Исключение ищется в 40 символах перед началом совпадения.
++_PLEADING_GAP_RE = re.compile(
++    r"(?:требован|данными?|данных|содержан|расч[её]т|уточнен|изменен)"
++    r"[^\n.]{0,30}исков\w*\s+заявлен",
++    re.IGNORECASE,
++)
++
++#: Экспертиза в материалах дела и в проекте — один корень, разные
++#: источники проверки.
++_EXPERT_RE = re.compile(r"эксперт|экспертиз", re.IGNORECASE)
++
++#: Ссылка на доказательства как на класс: «проект ссылается на
++#: доказательства, но их не оценивает».
++_EVIDENCE_RE = re.compile(r"доказательств|доказательству", re.IGNORECASE)
++
++
++@dataclass(frozen=True)
++class AssessmentCriterion:
++    """Один критерий оценки и то, найден ли он в проекте."""
++
++    criterion: str
++    marker: str
++    covered: bool
++
++    def to_dict(self) -> dict[str, object]:
++        return {
++            "criterion": self.criterion,
++            "marker": self.marker,
++            "covered": self.covered,
++        }
++
++
++@dataclass(frozen=True)
++class AssessmentFinding:
++    """Вопрос об оценке доказательств, который судья должен разрешить."""
++
++    kind: str  # "pleading_as_evidence" | "expert_unassessed" | "not_assessed"
++    reason: str
++    evidence: str = ""  # фрагмент проекта, вызвавший вопрос
++
++
++def assessment_of(draft_text: str) -> list[AssessmentCriterion]:
++    """Какие критерии ст. 67 ГПК РФ нашлись в тексте проекта."""
++    lower = draft_text.lower()
++    return [
++        AssessmentCriterion(
++            criterion=name, marker=marker, covered=marker in lower
++        )
++        for name, marker in CRITERIA
++    ]
++
++
++def _pleading_matches(text: str) -> list[re.Match[str]]:
++    """Совпадения «позиция стороны как доказательство» без ложных.
++
++    Из найденных отбрасываются те, перед которыми стоит слово-исключение:
++    подтверждается расчёт или уточнение, а не само заявление.
++    """
++    kept: list[re.Match[str]] = []
++    for match in _PLEADING_RE.finditer(text):
++        window_start = max(0, match.start() - 40)
++        if _PLEADING_GAP_RE.search(text[window_start : match.end()]):
++            continue
++        kept.append(match)
++    return kept
++
++
++def check_evidence_assessment(
++    draft_text: str, material_texts: list[str]
++) -> list[AssessmentFinding]:
++    """Вопросы об оценке доказательств (ст. 67, ч. 3 ст. 86 ГПК РФ).
++
++    Материалы дела нужны для заключения эксперта: вопрос задаётся
++    только когда экспертиза есть в деле и проект на неё ссылается.
++    Нет упоминания — нет и вопроса: отсутствие слова не повод
++    что-то требовать.
++    """
++    lower = draft_text.lower()
++    findings: list[AssessmentFinding] = []
++
++    # Позиция стороны как доказательство — независимо от того, есть ли
++    # остальная оценка: это ошибка вида, а не пробел.
++    for match in _pleading_matches(lower):
++        findings.append(
++            AssessmentFinding(
++                kind="pleading_as_evidence",
++                evidence=lower[match.start() : match.end()][:100],
++                reason=(
++                    "проект опирается на позицию стороны как на "
++                    "доказательство: исковое заявление и отзыв — это "
++                    "утверждения стороны, а не сведения о фактах; "
++                    "обстоятельство надлежит подтвердить доказательством "
++                    "(ст. 55 ГПК РФ)"
++                ),
++            )
++        )
++        break  # Один вопрос, а не пачка на каждый глагол.
++
++    covered_any = any(marker in lower for _name, marker in CRITERIA)
++    if covered_any:
++        return findings
++
++    expert_in_case = any(_EXPERT_RE.search(text) for text in material_texts)
++    if expert_in_case and _EXPERT_RE.search(lower):
++        findings.append(
++            AssessmentFinding(
++                kind="expert_unassessed",
++                reason=(
++                    "в деле заключение эксперта, проект ссылается на "
++                    "него, но не содержит оценки по критериям ст. 67 ГПК "
++                    "РФ: заключение исследуется наравне с другими "
++                    "доказательствами, оценивает его суд (ч. 3 ст. 86 ГПК "
++                    "РФ)"
++                ),
++            )
++        )
++    elif _EVIDENCE_RE.search(lower):
++        findings.append(
++            AssessmentFinding(
++                kind="not_assessed",
++                reason=(
++                    "проект ссылается на доказательства, но не оценивает "
++                    "их по ст. 67 ГПК РФ (относимость, допустимость, "
++                    "достоверность); оценка принадлежит суду — включить "
++                    "ли её в проект, решает судья"
++                ),
++            )
++        )
++
++    return findings
+diff --git a/backend/tests/test_evidence_assessment.py b/backend/tests/test_evidence_assessment.py
+new file mode 100644
+index 0000000..d5dba18
+--- /dev/null
++++ b/backend/tests/test_evidence_assessment.py
+@@ -0,0 +1,201 @@
++r"""Оценка доказательств по ст. 67 ГПК РФ (п. 5 разбора).
++
++Рецензент: нет оценки относимости, допустимости, достоверности и
++достаточности в совокупности; заключение эксперта принимается без
++оценки наравне с другими доказательствами (ч. 3 ст. 86 ГПК РФ).
++Проверяется две честные вещи: таблица критериев в проекте и вопросы
++наружу — позиция стороны как доказательство и эксперт без оценки.
++"""
++
++from app.agents.draft_agent import SectionDraft
++from app.agents.evidence_pack import EvidenceItem, EvidencePack
++from app.verification.engine import IssueType, Severity, verify_draft
++from app.verification.evidence_assessment import (
++    assessment_of,
++    check_evidence_assessment,
++)
++
++
++def _pack(*texts: str) -> EvidencePack:
++    pack = EvidencePack(case_number="T-0002")
++    for index, text in enumerate(texts, start=1):
++        pack.items.append(
++            EvidenceItem(
++                category="claim" if index == 1 else "objections",
++                text=text,
++                source_document=f"{index:02d}_doc.txt",
++                source_type="OTHER",
++                order=index,
++            )
++        )
++    return pack
++
++
++def _draft(text: str):
++    draft_stub = type("D", (), {})()
++    draft_stub.sections = [
++        SectionDraft(
++            key="findings", name="Мотивировочная часть", text=text, is_mock=False
++        )
++    ]
++    return draft_stub
++
++
++class TestAssessmentTable:
++    def test_criteria_marked_by_roots(self) -> None:
++        rows = assessment_of(
++            "Доказательства относимы, допустимы и достоверны; "
++            "совокупности доказательств достаточно."
++        )
++        assert all(row.covered for row in rows)
++
++    def test_unmentioned_criterion_stays_uncovered(self) -> None:
++        rows = assessment_of("Доказательства достоверны.")
++        by_name = {row.criterion: row.covered for row in rows}
++        assert by_name["достоверность"] is True
++        assert by_name["относимость"] is False
++        assert by_name["допустимость"] is False
++        assert by_name["достаточность в совокупности"] is False
++
++    def test_empty_draft_all_uncovered(self) -> None:
++        assert not any(row.covered for row in assessment_of(""))
++
++
++class TestPleadingAsEvidence:
++    def test_claim_as_evidence_flagged(self) -> None:
++        found = check_evidence_assessment(
++            "Обстоятельства дела подтверждаются исковым заявлением.", []
++        )
++        assert [f.kind for f in found] == ["pleading_as_evidence"]
++
++    def test_backward_order_flagged(self) -> None:
++        found = check_evidence_assessment(
++            "Заключение договора подтверждается исковым заявлением истца.", []
++        )
++        assert [f.kind for f in found] == ["pleading_as_evidence"]
++
++    def test_response_as_evidence_flagged(self) -> None:
++        found = check_evidence_assessment(
++            "Ответчик ссылается на то, что отзыв подтверждает оплату.", []
++        )
++        assert [f.kind for f in found] == ["pleading_as_evidence"]
++
++    def test_requirement_with_calculation_not_flagged(self) -> None:
++        # Подтверждается расчёт, а не заявление: верная фраза.
++        found = check_evidence_assessment(
++            "Расчёт требований искового заявления подтверждается "
++            "бухгалтерской справкой.",
++            [],
++        )
++        assert found == []
++
++    def test_party_explanations_not_flagged(self) -> None:
++        # Объяснения сторон — доказательство по ч. 1 ст. 55 ГПК РФ.
++        found = check_evidence_assessment(
++            "Объяснения представителя подтверждают обстоятельства дела.", []
++        )
++        assert found == []
++
++    def test_court_acceptance_not_flagged(self) -> None:
++        # Дальняя ссылка в том же предложении — заявление ничего не
++        # подтверждает, оно просто принято к производству. Вопрос
++        # «доказательства не оцениваются» здесь возможен и по ст. 67,
++        # но к позиции стороны отношения он не имеет.
++        found = check_evidence_assessment(
++            "Обстоятельства установлены судом по представленным "
++            "доказательствам, исковое заявление принято к производству.",
++            [],
++        )
++        assert not [f for f in found if f.kind == "pleading_as_evidence"]
++
++
++class TestAssessmentQuestions:
++    def test_evidence_without_assessment_question(self) -> None:
++        found = check_evidence_assessment(
++            "Выводы опираются на доказательства по делу.", []
++        )
++        assert [f.kind for f in found] == ["not_assessed"]
++
++    def test_assessed_draft_no_question(self) -> None:
++        found = check_evidence_assessment(
++            "Представленные доказательства относимы, допустимы и достоверны.", []
++        )
++        assert found == []
++
++    def test_expert_without_assessment_question(self) -> None:
++        found = check_evidence_assessment(
++            "По заключению эксперта размер долга составляет 150 000 руб.",
++            ["В деле заключение судебной экспертизы по количеству товара."],
++        )
++        assert [f.kind for f in found] == ["expert_unassessed"]
++
++    def test_expert_in_materials_draft_silent(self) -> None:
++        found = check_evidence_assessment(
++            "Проект опирается на договор и накладные.",
++            ["В деле заключение судебной экспертизы."],
++        )
++        assert found == []
++
++    def test_assessed_expert_no_question(self) -> None:
++        found = check_evidence_assessment(
++            "Достоверность заключения эксперта проверена наравне с "
++            "другими доказательствами.",
++            ["В деле заключение эксперта."],
++        )
++        assert found == []
++
++
++class TestEngineIntegration:
++    def test_pleading_flagged_high(self) -> None:
++        report = verify_draft(
++            _draft("Обстоятельства подтверждаются исковым заявлением."),
++            _pack("Истец просит взыскать долг."),
++        )
++        flagged = [i for i in report.issues if i.type is IssueType.PLEADING_AS_EVIDENCE]
++        assert flagged
++        assert flagged[0].severity is Severity.HIGH
++
++    def test_unassessed_evidence_question(self) -> None:
++        report = verify_draft(
++            _draft("Выводы опираются на доказательства по делу."),
++            _pack("Истец просит взыскать долг по договору."),
++        )
++        flagged = [
++            i for i in report.issues if i.type is IssueType.EVIDENCE_NOT_ASSESSED
++        ]
++        assert flagged
++        assert flagged[0].severity is Severity.MEDIUM
++
++    def test_assessment_table_in_report(self) -> None:
++        report = verify_draft(
++            _draft("Доказательства допустимы и достоверны."),
++            _pack("Истец просит взыскать долг."),
++        )
++        by_name = {row.criterion: row.covered for row in report.assessment}
++        assert by_name["допустимость"] is True
++        assert by_name["достоверность"] is True
++        assert by_name["относимость"] is False
++        payload = report.to_dict()
++        assert payload["evidence_assessment"] == [
++            c.to_dict() for c in report.assessment
++        ]
++
++    def test_expert_unassessed_question(self) -> None:
++        report = verify_draft(
++            _draft("Размер долга определён заключением эксперта."),
++            _pack("Истец просит взыскать долг.", "Назначена судебная экспертиза."),
++        )
++        flagged = [i for i in report.issues if i.type is IssueType.EXPERT_UNASSESSED]
++        assert flagged
++        assert flagged[0].severity is Severity.MEDIUM
++
++    def test_mock_section_not_flagged_for_assessment(self) -> None:
++        # Заглушка не содержит ни доказательств, ни критериев —
++        # замечание о неоценке ей не положено.
++        report = verify_draft(
++            _draft("Раздел не сформирован: модель не вызвана."),
++            _pack("Истец просит взыскать долг."),
++        )
++        assert not [
++            i for i in report.issues if i.type is IssueType.EVIDENCE_NOT_ASSESSED
++        ]
+-- 
+2.53.0.windows.2
+

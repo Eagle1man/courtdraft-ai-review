@@ -1,0 +1,357 @@
+From 493a26271da45454de53e88fd8a39026d087659b Mon Sep 17 00:00:00 2001
+From: Eagle1man <orel198611@gmail.com>
+Date: Mon, 19 Oct 2026 18:15:20 +0300
+Subject: [PATCH 01/20] =?UTF-8?q?=D0=A0=D0=BE=D0=B4=D0=BE=D0=B2=D0=B0?=
+ =?UTF-8?q?=D1=8F=20=D0=BF=D0=BE=D0=B4=D1=81=D1=83=D0=B4=D0=BD=D0=BE=D1=81?=
+ =?UTF-8?q?=D1=82=D1=8C=20+=20=D0=B6=D0=B8=D0=B2=D1=83=D1=87=D0=B0=D1=8F?=
+ =?UTF-8?q?=20=D0=B8=D0=BD=D0=B4=D0=B5=D0=BA=D1=81=D0=B0=D1=86=D0=B8=D1=8F?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+- app/verification/jurisdiction.py: родовая подсудность по цене иска
+  (п. 5 ч. 1 ст. 23 ГПК РФ): до 100 000 - мировой судья, свыше -
+  районный; сверка с судом, названным в материалах; суд не назван -
+  проверка молчит (признака нет - замечания нет)
+- engine.py: тип JURISDICTION_MISMATCH, проверка до разбора разделов
+- scripts/build_corpus_index.py: живучесть ночного прогона: один
+  упавший эмбеддинг пропускает решение (failed_sources.txt), а не
+  убивает run; progress.json теперь реально сохраняется и докатка
+  работает (раньше файл читался, но никогда не писался); куски
+  считаются из хранилища Qdrant, а не по текущему прогону
+
+584 passed, ruff clean, mypy --strict clean
+---
+ .gitignore                               |  5 +-
+ backend/app/verification/engine.py       | 17 +++++
+ backend/app/verification/jurisdiction.py | 84 ++++++++++++++++++++++++
+ backend/tests/test_jurisdiction.py       | 68 +++++++++++++++++++
+ scripts/build_corpus_index.py            | 77 +++++++++++++++-------
+ 5 files changed, 226 insertions(+), 25 deletions(-)
+ create mode 100644 backend/app/verification/jurisdiction.py
+ create mode 100644 backend/tests/test_jurisdiction.py
+
+diff --git a/.gitignore b/.gitignore
+index 1f2f6e2..4086982 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -101,4 +101,7 @@ data/lora/
+ # Индекс резолютивных частей корпуса: производный от реальных решений
+ # и сам корпус весом в гигабайты. На машине остаётся, в репозиторий не
+ # попадает.
+-data/corpus_index/
++data/corpus_index/
++data/corpus_index_full/
++data/index_smoke/
++data/index_smoke2/
+diff --git a/backend/app/verification/engine.py b/backend/app/verification/engine.py
+index c4709bc..06ab6ac 100644
+--- a/backend/app/verification/engine.py
++++ b/backend/app/verification/engine.py
+@@ -27,6 +27,7 @@ from app.agents.evidence_pack import EvidencePack
+ from app.config import Settings
+ from app.drafting.operative import DEFAULT_LEGAL_BASIS
+ from app.drafting.requirements import extract_requirements
++from app.verification.jurisdiction import check_jurisdiction
+ from app.verification.laws import LawRegistry, extract_fee, fee_matches, state_fee
+ from app.verification.persons import check_section
+ 
+@@ -45,6 +46,7 @@ class IssueType(StrEnum):
+     PRACTICE_NOT_FOUND = "PRACTICE_NOT_FOUND"
+     CONTRADICTION = "CONTRADICTION"
+     INCOMPLETE = "INCOMPLETE"
++    JURISDICTION_MISMATCH = "JURISDICTION_MISMATCH"
+ 
+ 
+ class Severity(StrEnum):
+@@ -297,6 +299,21 @@ def verify_draft(
+         float(claim.amount or 0) for claim in money_claims if claim.amount is not None
+     )
+ 
++    # Родовая подсудность сверяется с судом из материалов: расхождение
++    # между ценой иска и инстанцией — то, что судья должен увидеть до
++    # чтения проекта, а не после.
++    for jur_finding in check_jurisdiction(
++        [item.text for item in pack.items], claim_total
++    ):
++        report.issues.append(
++            Issue(
++                type=IssueType.JURISDICTION_MISMATCH,
++                severity=Severity.HIGH,
++                text="",
++                reason=jur_finding.reason,
++            )
++        )
++
+     for section in draft.sections:
+         text = section.text
+ 
+diff --git a/backend/app/verification/jurisdiction.py b/backend/app/verification/jurisdiction.py
+new file mode 100644
+index 0000000..c107606
+--- /dev/null
++++ b/backend/app/verification/jurisdiction.py
+@@ -0,0 +1,84 @@
++"""Проверка родовой подсудности (п. 5 ч. 1 ст. 23 ГПК РФ).
++
++Имущественный спор при цене иска до 100 000 руб. включительно
++рассматривает мировой судья, свыше — районный суд. Проверка не решает
++за судью: она сверяет цену иска с тем судом, который назван в
++материалах, и расхождение показывает судье. Суд из материалов
++не определяется — это признак, а не выдумка.
++
++Подведомственность «арбитраж или общая юрисдикция» (ст. 27, 28 АПК РФ,
++ч. 2.1 ст. 33 ГПК РФ) здесь не решается: она требует установления рода
++деятельности сторон, который по текстам материалов уверенно не
++определяется. Родовая подсудность — закрытое правило с числом, его
++можно проверять честно.
++"""
++
++from __future__ import annotations
++
++import re
++from dataclasses import dataclass
++
++#: Порог родовой подсудности: п. 5 ч. 1 ст. 23 ГПК РФ, цена иска
++#: до 100 000 руб. включительно — мировой судья.
++WORLD_LIMIT: float = 100_000.0
++
++_WORLD_RE = re.compile(r"миров\w*\s+суд\w*", re.IGNORECASE)
++_DISTRICT_RE = re.compile(r"районн\w*\s+суд\w*", re.IGNORECASE)
++
++
++@dataclass(frozen=True)
++class JurisdictionFinding:
++    """Расхождение между ценой иска и судом в материалах."""
++
++    expected: str  # «мировой судья» | «районный суд»
++    found: str  # что написано в материалах
++    reason: str  # готовый текст замечания
++
++
++def expected_tier(price: float) -> str:
++    """Какой суд должен рассматривать спор по цене иска."""
++    if 0 < price <= WORLD_LIMIT:
++        return "мировой судья"
++    return "районный суд"
++
++
++def _court_tier_in(text: str) -> str | None:
++    if _WORLD_RE.search(text):
++        return "мировой судья"
++    if _DISTRICT_RE.search(text):
++        return "районный суд"
++    return None
++
++
++def check_jurisdiction(
++    court_texts: list[str], claim_total: float
++) -> list[JurisdictionFinding]:
++    """Сверить цену иска с судом, названным в материалах.
++
++    Тексты материалов передаются списком: суд ищется по всем
++    документам дела, а не по первому попавшемуся. Материалы не называют
++    суд — проверка молчит: отсутствие признака не превращается в
++    замечание.
++    """
++    if claim_total <= 0:
++        return []
++    expected = expected_tier(claim_total)
++    for text in court_texts:
++        found = _court_tier_in(text)
++        if found is None:
++            continue
++        if found != expected:
++            return [
++                JurisdictionFinding(
++                    expected=expected,
++                    found=found,
++                    reason=(
++                        f"при цене иска {claim_total:.0f} руб. родовая "
++                        f"подсудность — {expected} (п. 5 ч. 1 ст. 23 ГПК РФ), "
++                        f"а в материалах дела указан {found}: проверить, "
++                        "куда передано дело"
++                    ),
++                )
++            ]
++        return []
++    return []
+diff --git a/backend/tests/test_jurisdiction.py b/backend/tests/test_jurisdiction.py
+new file mode 100644
+index 0000000..c91e273
+--- /dev/null
++++ b/backend/tests/test_jurisdiction.py
+@@ -0,0 +1,68 @@
++"""Проверка родовой подсудности (п. 5 ч. 1 ст. 23 ГПК РФ)."""
++
++from app.verification.jurisdiction import check_jurisdiction, expected_tier
++
++
++class TestExpectedTier:
++    """Порог 100 000 руб. — мировой судья, свыше — районный."""
++
++    def test_small_claim_world_judge(self) -> None:
++        assert expected_tier(100_000) == "мировой судья"
++
++    def test_over_limit_district(self) -> None:
++        assert expected_tier(100_001) == "районный суд"
++
++    def test_zero_no_tier(self) -> None:
++        assert expected_tier(0) == "районный суд"
++
++
++class TestCheckJurisdiction:
++    """Расхождение видно, совпадение молчит, отсутствие тоже молчит."""
++
++    def test_mismatch_world_judge_over_limit(self) -> None:
++        findings = check_jurisdiction(
++            ["Иск подан мировому судье судебного участка № 12"],
++            claim_total=150_000,
++        )
++        assert len(findings) == 1
++        assert findings[0].expected == "районный суд"
++        assert "мировой" in findings[0].found
++
++    def test_mismatch_district_small_claim(self) -> None:
++        findings = check_jurisdiction(
++            ["Дело рассматривается районным судом"], claim_total=50_000
++        )
++        assert len(findings) == 1
++        assert findings[0].expected == "мировой судья"
++
++    def test_match_is_silent(self) -> None:
++        assert not check_jurisdiction(
++            ["Мировой судья судебного участка № 3"], claim_total=80_000
++        )
++
++    def test_no_court_mention_is_silent(self) -> None:
++        # Суд не назван в материалах — замечания нет: признака нет,
++        # выдумывать инстанцию система не умеет.
++        assert not check_jurisdiction(
++            ["Истец просит взыскать долг по договору"], claim_total=150_000
++        )
++
++    def test_no_claims_is_silent(self) -> None:
++        # Цена иска неизвестна — сверять нечего.
++        assert not check_jurisdiction(
++            ["Районный суд"], claim_total=0
++        )
++
++    def test_court_found_in_any_document(self) -> None:
++        # Суд может быть назван не в первом документе дела.
++        findings = check_jurisdiction(
++            ["Прошу взыскать долг", "определение мирового судьи"],
++            claim_total=200_000,
++        )
++        assert len(findings) == 1
++
++    def test_match_in_later_document(self) -> None:
++        assert not check_jurisdiction(
++            ["Прошу взыскать долг", "решение районного суда"],
++            claim_total=200_000,
++        )
+diff --git a/scripts/build_corpus_index.py b/scripts/build_corpus_index.py
+index f659055..f9b1001 100644
+--- a/scripts/build_corpus_index.py
++++ b/scripts/build_corpus_index.py
+@@ -281,44 +281,73 @@ async def embed_and_store(
+     if done:
+         print(f"продолжаю: ранее записано решений {len(done)}")
+ 
++    # Один упавший эмбеддинг не должен убивать многочасовой прогон:
++    # три запуска подряд гибли на транзиентных сбоях, и всё, что
++    # уже успело записаться до сбоя, принадлежало именно им.
+     points: list[models.PointStruct] = []
+-    chunks_total = 0
++    pending_sources: list[str] = []
++    failed: list[str] = []
+     for number, decision in enumerate(decisions, start=1):
+         if decision["source"] in done:
+             continue
+-        for chunk in chunk_text(
+-            decision["operative"], document_id=decision["source"], settings=cfg
+-        ):
+-            vector = await embed_with_retry(provider, chunk.text)
+-            # Qdrant требует UUID. Идентификатор детерминированный:
+-            # пересборка индекса перезаписывает те же точки, а не
+-            # добавляет дубликаты.
+-            point_id = str(uuid.uuid5(uuid.NAMESPACE_URL, chunk.chunk_id))
+-            points.append(
+-                models.PointStruct(
+-                    id=point_id,
+-                    vector=vector,
+-                    payload={
+-                        "source": decision["source"],
+-                        "text": chunk.text,
+-                        "outcome": decision["outcome"],
+-                        "subject": decision["subject"],
+-                        "court": decision["court"],
+-                    },
++        try:
++            for chunk in chunk_text(
++                decision["operative"], document_id=decision["source"], settings=cfg
++            ):
++                vector = await embed_with_retry(provider, chunk.text)
++                # Qdrant требует UUID. Идентификатор детерминированный:
++                # пересборка индекса перезаписывает те же точки, а не
++                # добавляет дубликаты.
++                point_id = str(uuid.uuid5(uuid.NAMESPACE_URL, chunk.chunk_id))
++                points.append(
++                    models.PointStruct(
++                        id=point_id,
++                        vector=vector,
++                        payload={
++                            "source": decision["source"],
++                            "text": chunk.text,
++                            "outcome": decision["outcome"],
++                            "subject": decision["subject"],
++                            "court": decision["court"],
++                        },
++                    )
+                 )
++        except Exception as error:  # noqa: BLE001 - пропуск вместо падения
++            failed.append(decision["source"])
++            print(
++                f"  пропуск {decision['source']}: "
++                f"{error.__class__.__name__}: {error}"
+             )
+-            chunks_total += 1
++            continue
++        pending_sources.append(decision["source"])
+ 
+-        if number % 25 == 0:
++        if number % 25 == 0 and points:
+             client.upsert(collection_name=COLLECTION, points=points)
+-            print(f"  {number}/{len(decisions)} решений, кусков {chunks_total}")
++            done.update(pending_sources)
++            save_progress(index_path, done)
++            print(f"  {number}/{len(decisions)} решений, пропущено {len(failed)}")
+             points = []
++            pending_sources = []
+ 
+     if points:
+         client.upsert(collection_name=COLLECTION, points=points)
++        done.update(pending_sources)
++        save_progress(index_path, done)
++
++    if failed:
++        print(f"не проиндексировано решений: {len(failed)}")
++        (index_path / "failed_sources.txt").write_text(
++            "\n".join(failed), encoding="utf-8"
++        )
+ 
+     client.close()
+-    return len(decisions), chunks_total
++    # Число кусков берем из хранилища: при докатке счетчик по текущему
++    # прогону не учитывает куски, записанные до падения.
++    client = QdrantClient(path=str(index_path / "qdrant"))
++    chunks = client.count(COLLECTION, exact=True).count
++    client.close()
++    decisions_count = len(done) if done else len(decisions)
++    return decisions_count, chunks
+ 
+ 
+ async def search(index_path: Path, query: str, limit: int) -> int:
+-- 
+2.53.0.windows.2
+
