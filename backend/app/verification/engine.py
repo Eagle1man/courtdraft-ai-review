@@ -24,7 +24,7 @@ from enum import StrEnum
 from pathlib import Path
 
 from app.agents.draft_agent import NEEDS_REVIEW, DraftResult
-from app.agents.evidence_pack import MONTHS, EvidencePack
+from app.agents.evidence_pack import MONTHS, EvidenceItem, EvidencePack
 from app.config import Settings
 from app.drafting.operative import DEFAULT_LEGAL_BASIS
 from app.drafting.requirements import extract_requirements
@@ -52,6 +52,8 @@ class IssueType(StrEnum):
     OBJECTIONS_UNADDRESSED = "OBJECTIONS_UNADDRESSED"
     PRETRIAL_UNADDRESSED = "PRETRIAL_UNADDRESSED"
     FEE_IN_CLAIM_PRICE = "FEE_IN_CLAIM_PRICE"
+    STATEMENT_LIMITATION = "STATEMENT_LIMITATION"
+    STATEMENT_PENALTY_REDUCTION = "STATEMENT_PENALTY_REDUCTION"
 
 
 class Severity(StrEnum):
@@ -682,6 +684,74 @@ def verify_draft(
                     "госпошлина указана включённой в цену иска: по ч. 1 "
                     "ст. 91 ГПК РФ цена иска определяется без госпошлины, "
                     "госпошлина — судебный расход (ст. 98 ГПК РФ)"
+                ),
+            )
+        )
+
+    # ── Заявления, меняющие исход (п. 76) ───────────────────────────
+    # Пропуск срока исковой давности (ст. 199 ГК РФ) и снижение
+    # неустойки (ст. 333 ГК РФ) суд разрешает только по заявлению
+    # стороны — по своей инициативе они не применяются. Если такое
+    # заявление есть в отзывах или протоколе, а проект о нём молчит,
+    # судья не видит вопроса, который надо разрешить отдельно.
+    # Молчание проекта проверяется по тем же маркерам, что и наличие
+    # в материалах: лишнего не выдумываем.
+    party_statements = [
+        item
+        for item in pack.items
+        if item.category in ("objections", "protocol_findings", "disputed_facts")
+    ]
+    statement_text = " ".join(i.text.lower() for i in party_statements)
+
+    def _find_statement(*needles: str) -> EvidenceItem | None:
+        """Фрагмент-заявление, в котором нашлось хоть одно слово-маркер.
+
+        Ищется по тому же признаку, по которому сработало условие, чтобы
+        случай не StopIteration, когда маркер собран из разных фрагментов.
+        """
+        for item in party_statements:
+            low = item.text.lower()
+            if any(needle in low for needle in needles):
+                return item
+        return party_statements[0] if party_statements else None
+
+    # Корень «давност» ловит все падежи («о пропуске срока исковой
+    # давности», «давност»); точные фразы падежами разъезжались.
+    if "давност" in statement_text and "давност" not in draft_text:
+        source = _find_statement("давност")
+        report.issues.append(
+            Issue(
+                type=IssueType.STATEMENT_LIMITATION,
+                severity=Severity.HIGH,
+                text=(source.text[:200] if source else ""),
+                reason=(
+                    "в материалах заявление о пропуске срока исковой "
+                    "давности, а проект его не разрешает — суд применяет "
+                    "давность только по заявлению стороны (ст. 199 ГК РФ, "
+                    "ч. 2 ст. 196, п. 3 ст. 199 ГПК РФ)"
+                ),
+            )
+        )
+
+    # Снижение неустойки: корни «сниж»/«уменьш» плюс прямая ссылка на
+    # ст. 333 ГК. Самого слова «неустойка» мало — ответчик может жаловаться
+    # на размер долга, не прося снижения.
+    reduction_requested = "неустойк" in statement_text and (
+        "сниж" in statement_text
+        or "уменьш" in statement_text
+        or "333" in statement_text
+    )
+    if reduction_requested and "неустойк" not in draft_text and "333" not in draft_text:
+        source = _find_statement("сниж", "уменьш", "333")
+        report.issues.append(
+            Issue(
+                type=IssueType.STATEMENT_PENALTY_REDUCTION,
+                severity=Severity.HIGH,
+                text=(source.text[:200] if source else ""),
+                reason=(
+                    "в материалах заявление о снижении неустойки, а проект "
+                    "о нём не упоминает — суд снижает неустойку только по "
+                    "заявлению стороны (ст. 333 ГК РФ)"
                 ),
             )
         )
