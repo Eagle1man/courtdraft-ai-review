@@ -669,6 +669,7 @@ cd backend
 | [`docs/report-mvp.md`](docs/report-mvp.md) | Отчёт: что сделано и план до MVP |
 | [`docs/api.md`](docs/api.md) | Описание API |
 | [`SECURITY.md`](SECURITY.md) | Безопасность и известные ограничения |
+| [`docs/legal-regime.md`](docs/legal-regime.md) | Правовой режим данных: история версий, тайна совещания, Указ № 490 |
 | [`CONTRIBUTING.md`](CONTRIBUTING.md) | Как участвовать |
 | [`docs/deployment-rtx3050.md`](docs/deployment-rtx3050.md) | Развёртывание на RTX 3050 |
 
