@@ -15,13 +15,51 @@
   "use strict";
 
   var DATA_URL = "demo-data.json";
+  var CASES_URL = "cases.json";
 
+  /*
+   * Всё, что видит пользователь, — на русском. В данных статусы,
+   * уровни замечаний и типы документов приходят английскими кодами
+   * (REVIEW_REQUIRED, HIGH, CLAIM), а показываются словами. Неизвестный
+   * код показывается как есть: типы документов расширяемы данными, и
+   * выдумывать перевод для нового типа нельзя (п. 10 разбора).
+   */
   var VERDICT_TEXT = {
-    PASS: "PASS: замечаний нет",
-    REVIEW_REQUIRED:
-      "REVIEW_REQUIRED: проект требует проверки специалистом",
-    FAILED: "FAILED: проект не может быть показан как готовый"
+    PASS: "Замечаний нет",
+    REVIEW_REQUIRED: "Требует проверки специалистом",
+    BLOCKED: "Проверка заблокировала показ проекта",
+    FAILED: "Проект не может быть показан как готовый"
   };
+
+  var SEVERITY_TEXT = {
+    CRITICAL: "критично",
+    HIGH: "существенно",
+    MEDIUM: "требует внимания",
+    LOW: "незначительно"
+  };
+
+  var STATUS_TEXT = {
+    PASS: "замечаний нет",
+    REVIEW_REQUIRED: "требует проверки",
+    BLOCKED: "заблокировано"
+  };
+
+  var DOC_TYPE_TEXT = {
+    CLAIM: "Исковое заявление",
+    RESPONSE: "Отзыв",
+    CONTRACT: "Договор",
+    RECEIPT: "Платёжный документ",
+    ACT: "Акт",
+    EXPERT_OPINION: "Заключение эксперта",
+    EVIDENCE: "Доказательство",
+    MOTION: "Ходатайство",
+    PROTOCOL: "Протокол",
+    OTHER: "Иной документ"
+  };
+
+  function label(map, key) {
+    return map[key] || key;
+  }
 
   function $(id) {
     return document.getElementById(id);
@@ -89,7 +127,7 @@
         return (
           "<li>" +
           '<span class="type">' +
-          escapeHtml(doc.document_type || "ДОК") +
+          escapeHtml(label(DOC_TYPE_TEXT, doc.document_type) || "Документ") +
           "</span>" +
           escapeHtml(doc.name) +
           escapeHtml(facts) +
@@ -113,7 +151,7 @@
       " · источников: " +
       data.sources.length +
       " · проверка: " +
-      data.verification.status;
+      label(STATUS_TEXT, data.verification.status);
   }
 
   function renderVerification(verification) {
@@ -132,34 +170,50 @@
 
     var severity = verification.by_severity || {};
     Object.keys(severity).forEach(function (level) {
-      counts.push(level + ": " + severity[level]);
+      counts.push(label(SEVERITY_TEXT, level) + ": " + severity[level]);
     });
 
     var summary = document.createElement("p");
     summary.className = "muted";
     summary.textContent = counts.join(" · ");
-    box.insertBefore(summary, $("issues"));
+    // Сам список замечаний уходит к разделам текста: замечание
+    // читается рядом с абзацем, к которому относится (п. 10 разбора).
+    box.appendChild(summary);
+  }
 
-    $("issues").innerHTML = (verification.issues || [])
-      .map(function (issue) {
-        return (
-          '<li class="' +
-          escapeHtml(issue.severity) +
-          '"><span class="where">' +
-          escapeHtml(issue.severity) +
-          (issue.section ? " · " + escapeHtml(issue.section) : "") +
-          '</span><span class="why">' +
-          escapeHtml(issue.reason) +
-          "</span></li>"
-        );
-      })
-      .join("");
+  /* Одно замечание для списка. Внутри раздела порядок: уровень, а
+   * раздел и так виден вокруг; в общем списке — уровень и раздел. */
+  function issueItem(issue, withSection) {
+    var where = [label(SEVERITY_TEXT, issue.severity) || issue.severity];
+    if (withSection && issue.section) where.push(issue.section);
+    return (
+      '<li class="' +
+      escapeHtml(issue.severity) +
+      '"><span class="where">' +
+      escapeHtml(where.join(" · ")) +
+      '</span><span class="why">' +
+      escapeHtml(issue.reason) +
+      "</span></li>"
+    );
   }
 
   function renderSections(data) {
     var box = $("sections");
+
+    // Замечания группируются по имени раздела: проверка привязывает
+    // замечание к разделу текста, и судья читает его рядом с абзацем,
+    // а не списком перед решением.
+    var issues = (data.verification && data.verification.issues) || [];
+    var bySection = {};
+    issues.forEach(function (issue) {
+      var key = issue.section || "";
+      (bySection[key] = bySection[key] || []).push(issue);
+    });
+    var matched = {};
+
     box.innerHTML = data.sections
       .map(function (section) {
+        matched[section.name] = true;
         var badges = [];
         if (section.needs_review) {
           badges.push('<span class="badge review">требует проверки</span>');
@@ -180,6 +234,18 @@
             ? "Источники: " + section.citations.map(escapeHtml).join(", ")
             : "Источник не указан — раздел требует проверки.";
 
+        var sectionIssues = bySection[section.name];
+        var issueHtml =
+          sectionIssues && sectionIssues.length
+            ? '<ul class="issues section-issues">' +
+              sectionIssues
+                .map(function (issue) {
+                  return issueItem(issue, false);
+                })
+                .join("") +
+              "</ul>"
+            : "";
+
         return (
           '<article class="section' +
           (section.needs_review ? " flagged" : "") +
@@ -189,12 +255,36 @@
           badges.join(" ") +
           '</div></header><div class="body">' +
           escapeHtml(section.text) +
-          '</div><div class="citations">' +
+          "</div>" +
+          issueHtml +
+          '<div class="citations">' +
           citations +
           "</div></article>"
         );
       })
       .join("");
+
+    // Замечания, которые проверка не привязала к разделу или привязала
+    // к несуществующему, — после текста, а не перед ним.
+    var leftover = [];
+    Object.keys(bySection).forEach(function (key) {
+      if (!matched[key]) leftover = leftover.concat(bySection[key]);
+    });
+    if (leftover.length) {
+      var rest = document.createElement("div");
+      rest.className = "unsectioned";
+      rest.innerHTML =
+        '<p class="muted small">Эти замечания проверка не привязала ' +
+        "к конкретному разделу:</p>" +
+        '<ul class="issues">' +
+        leftover
+          .map(function (issue) {
+            return issueItem(issue, true);
+          })
+          .join("") +
+        "</ul>";
+      box.appendChild(rest);
+    }
 
     var note = document.createElement("p");
     note.className = "muted small";
@@ -210,6 +300,50 @@
     $("source-list").innerHTML = sources
       .map(function (source) {
         return "<li>" + escapeHtml(source) + "</li>";
+      })
+      .join("");
+  }
+
+  /*
+   * Сравнение «проект системы / решение суда» по реальным делам —
+   * самое убедительное в проекте, по замечанию рецензента, поэтому
+   * оно вынесено на главную страницу демо. Слева — резолютивная часть,
+   * собранная системой по материалам дела; справа — как постановил суд.
+   * Система решение суда не получала: оно показано только для
+   * сравнения, и оба текста обезличены.
+   */
+  function renderComparison(payload) {
+    if (!payload || !payload.cases || !payload.cases.length) return;
+    show($("comparison"), true);
+    $("comparison-note").textContent =
+      "Слева — резолютивная часть, собранная системой по материалам " +
+      "реального дела. Справа — как постановил суд по этому же делу. " +
+      "Система решение суда не видела: оно приведено только для " +
+      "сравнения. Все тексты обезличены — фамилии, инициалы, названия " +
+      "организации и номера дел заменены.";
+    $("comparison-list").innerHTML = payload.cases
+      .map(function (case_, index) {
+        var head = "Дело № " + escapeHtml(case_.case_number || case_.slug || "—");
+        if (case_.category) head += " · " + escapeHtml(case_.category);
+        var claim = amount(case_.claim_amount);
+        if (claim) head += " · иск " + claim;
+        return (
+          '<details class="compare-case"' +
+          (index === 0 ? " open" : "") +
+          "><summary>" +
+          head +
+          "</summary>" +
+          '<div class="compare-cols">' +
+          '<div class="compare-col"><h4>Проект системы</h4>' +
+          '<div class="compare-text">' +
+          escapeHtml(case_.operative_text || "—") +
+          "</div></div>" +
+          '<div class="compare-col"><h4>Решение суда</h4>' +
+          '<div class="compare-text">' +
+          escapeHtml(case_.court_decision_reference || "—") +
+          "</div></div>" +
+          "</div></details>"
+        );
       })
       .join("");
   }
@@ -255,7 +389,21 @@
       if (!response.ok) throw new Error("HTTP " + response.status);
       return response.json();
     })
-    .then(start)
+    .then(function (data) {
+      start(data);
+      // Сравнение — вторым запросом: если cases.json не выложили
+      // (демо без реальных дел), страница не должна от этого падать —
+      // блок просто останется скрытым.
+      fetch(CASES_URL)
+        .then(function (response) {
+          if (!response.ok) throw new Error("HTTP " + response.status);
+          return response.json();
+        })
+        .then(renderComparison)
+        .catch(function () {
+          /* блок сравнения остаётся скрытым */
+        });
+    })
     .catch(function (error) {
       fail(error.message);
     });

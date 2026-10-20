@@ -57,6 +57,9 @@ body {
 
 .status { font-size: 13px; opacity: 0.9; text-align: right; }
 
+/* Ссылки шапки переносятся целиком, а не посреди слова (п. 10). */
+.status a { white-space: nowrap; }
+
 /* ── Предупреждение о статусе текста ──────────────────────────── */
 
 .notice {
@@ -147,10 +150,14 @@ body {
 .doc-list .type {
   display: inline-block;
   min-width: 88px;
+  margin-right: 6px;
   font-size: 11px;
   color: var(--muted);
   text-transform: uppercase;
   letter-spacing: 0.4px;
+  /* Метка не сливается с названием файла и на телефоне ломается
+   * по словам, а не посреди (п. 10 разбора). */
+  overflow-wrap: anywhere;
 }
 
 /* ── Кнопки ───────────────────────────────────────────────────── */
@@ -320,6 +327,13 @@ body {
 .section.flagged > header { background: var(--warn-bg); }
 
 .section.flagged { border-color: #e0c98d; }
+
+/* Замечания, нарисованные внутри раздела: прижаты к тексту, но не
+ * теряются в нём — читаются между телом раздела и источниками. */
+.section .issues { margin: 0 14px 12px; }
+
+/* Замечания, которые проверка не привязала к разделу. */
+.unsectioned { margin-top: 14px; }
 
 .badge {
   font-size: 11px;

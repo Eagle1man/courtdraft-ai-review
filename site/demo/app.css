@@ -57,6 +57,9 @@ body {
 
 .status { font-size: 13px; opacity: 0.9; text-align: right; }
 
+/* Ссылки шапки переносятся целиком, а не посреди слова (п. 10). */
+.status a { white-space: nowrap; }
+
 /* ── Предупреждение о статусе текста ──────────────────────────── */
 
 .notice {
@@ -147,10 +150,14 @@ body {
 .doc-list .type {
   display: inline-block;
   min-width: 88px;
+  margin-right: 6px;
   font-size: 11px;
   color: var(--muted);
   text-transform: uppercase;
   letter-spacing: 0.4px;
+  /* Метка не сливается с названием файла и на телефоне ломается
+   * по словам, а не посреди (п. 10 разбора). */
+  overflow-wrap: anywhere;
 }
 
 /* ── Кнопки ───────────────────────────────────────────────────── */
@@ -321,6 +328,13 @@ body {
 
 .section.flagged { border-color: #e0c98d; }
 
+/* Замечания, нарисованные внутри раздела: прижаты к тексту, но не
+ * теряются в нём — читаются между телом раздела и источниками. */
+.section .issues { margin: 0 14px 12px; }
+
+/* Замечания, которые проверка не привязала к разделу. */
+.unsectioned { margin-top: 14px; }
+
 .badge {
   font-size: 11px;
   padding: 2px 8px;
@@ -338,6 +352,53 @@ body {
   font-size: 12.5px;
   color: var(--muted);
   background: #fbfbf9;
+}
+
+/* ── Сравнение с решением суда ────────────────────────────────── */
+
+.comparison { margin-top: 24px; }
+
+.comparison h3 {
+  margin: 0 0 6px;
+  font-size: 14px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--muted);
+}
+
+.compare-cols {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+  padding: 2px 0 8px;
+}
+
+/* На телефоне колонки идут в столбик: в двух колонках тексты
+ * решения становятся по три слова в строку. */
+@media (max-width: 860px) {
+  .compare-cols { grid-template-columns: 1fr; }
+}
+
+.compare-col h4 {
+  margin: 0 0 6px;
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--muted);
+}
+
+.compare-text {
+  white-space: pre-wrap;
+  font-size: 13.5px;
+  line-height: 1.6;
+  background: #fbfbf9;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 10px 12px;
+  /* Длинные решения суда прокручиваются внутри своей колонки,
+   * а не растягивают страницу на всю высоту. */
+  max-height: 340px;
+  overflow: auto;
 }
 
 /* ── Источники и версии ──────────────────────────────────────── */

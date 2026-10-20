@@ -17,6 +17,24 @@
   var DATA_URL = "cases.json";
   var state = { cases: [], current: null };
 
+  /* Коды из данных показываются словами (п. 10 разбора). */
+  var SEVERITY_TEXT = {
+    CRITICAL: "критично",
+    HIGH: "существенно",
+    MEDIUM: "требует внимания",
+    LOW: "незначительно"
+  };
+
+  var STATUS_TEXT = {
+    PASS: "замечаний нет",
+    REVIEW_REQUIRED: "требует проверки",
+    BLOCKED: "заблокировано"
+  };
+
+  function label(map, key) {
+    return map[key] || key;
+  }
+
   function $(id) {
     return document.getElementById(id);
   }
@@ -204,7 +222,7 @@
       if (!issues.length && !gaps.length) {
         return (
           "<p>Замечаний нет. Статус: <strong>" +
-          escapeHtml(verification.status || "") +
+          escapeHtml(label(STATUS_TEXT, verification.status) || verification.status || "—") +
           "</strong>.</p>"
         );
       }
@@ -213,7 +231,7 @@
           '<strong class="sev sev-' +
           escapeHtml(issue.severity) +
           '">' +
-          escapeHtml(issue.severity) +
+          escapeHtml(label(SEVERITY_TEXT, issue.severity) || issue.severity) +
           "</strong> " +
           escapeHtml(issue.reason) +
           (issue.section ? " <em>(" + escapeHtml(issue.section) + ")</em>" : "")
@@ -224,7 +242,7 @@
       });
       return (
         "<p>Проверка проекта: <strong>" +
-        escapeHtml(verification.status || "") +
+        escapeHtml(label(STATUS_TEXT, verification.status) || verification.status || "—") +
         "</strong>, замечаний: " +
         (issues.length + gaps.length) +
         ", утверждений без источника: " +

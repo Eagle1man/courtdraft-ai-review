@@ -78,6 +78,51 @@ function escapeHtml(text) {
 
 const NEEDS_REVIEW = "ТРЕБУЕТ ПРОВЕРКИ СПЕЦИАЛИСТОМ";
 
+/*
+  Коды из данных показываются словами: статусы, уровни замечаний и
+  типы документов приходят английскими кодами (REVIEW_REQUIRED, HIGH,
+  CLAIM). Неизвестный код показывается как есть — типы документов
+  расширяемы данными, и выдумывать перевод нельзя (п. 10 разбора).
+*/
+const SEVERITY_TEXT = {
+  CRITICAL: "критично",
+  HIGH: "существенно",
+  MEDIUM: "требует внимания",
+  LOW: "незначительно",
+};
+
+const VERIFY_STATUS_TEXT = {
+  PASS: "замечаний нет",
+  REVIEW_REQUIRED: "требует проверки",
+  BLOCKED: "заблокировано",
+};
+
+const DRAFT_STATUS_TEXT = {
+  DRAFT: "черновик",
+  UNDER_REVIEW: "на проверке",
+  VERIFIED: "проверен",
+  ACCEPTED: "принят",
+  REJECTED: "отклонён",
+  REGENERATED: "перегенерирован",
+};
+
+const DOC_TYPE_TEXT = {
+  CLAIM: "Исковое заявление",
+  RESPONSE: "Отзыв",
+  CONTRACT: "Договор",
+  RECEIPT: "Платёжный документ",
+  ACT: "Акт",
+  EXPERT_OPINION: "Заключение эксперта",
+  EVIDENCE: "Доказательство",
+  MOTION: "Ходатайство",
+  PROTOCOL: "Протокол",
+  OTHER: "Иной документ",
+};
+
+function label(map, key) {
+  return map[key] || key;
+}
+
 /* ── Состояние сервиса ────────────────────────────────────────── */
 
 async function loadHealth() {
@@ -220,7 +265,7 @@ async function loadDocuments() {
   state.documents.forEach((doc) => {
     const li = document.createElement("li");
     li.innerHTML =
-      `<span class="type">${escapeHtml(doc.document_type)}</span>` +
+      `<span class="type">${escapeHtml(label(DOC_TYPE_TEXT, doc.document_type) || doc.document_type || "Документ")}</span>` +
       escapeHtml(doc.filename);
     list.appendChild(li);
   });
@@ -329,7 +374,7 @@ async function loadDraft() {
 
   $("draft-title").textContent = `Проект решения по делу`;
   $("draft-meta").textContent =
-    `версия ${draft.current_version} · статус ${draft.status} · ` +
+    `версия ${draft.current_version} · статус ${label(DRAFT_STATUS_TEXT, draft.status)} · ` +
     `разделов ${draft.sections.length} · ` +
     `источников ${draft.sources.length}`;
 
@@ -346,7 +391,40 @@ function renderSections(draft) {
   const box = $("sections");
   box.innerHTML = "";
 
+  /*
+    Замечания группируются по имени раздела: судья читает замечание
+    рядом с абзацем, к которому оно относится, а не списком перед
+    текстом (п. 10 разбора).
+  */
+  const issues = (draft.verification && draft.verification.issues) || [];
+  const bySection = {};
+  issues.forEach((issue) => {
+    const key = issue.section || "";
+    (bySection[key] = bySection[key] || []).push(issue);
+  });
+  const matched = {};
+
+  const issueHtml = (list, withSection) =>
+    `<ul class="issues section-issues">` +
+    list
+      .map((issue) => {
+        const where = [label(SEVERITY_TEXT, issue.severity) || issue.severity];
+        if (withSection && issue.section) where.push(issue.section);
+        return (
+          `<li class="${escapeHtml(issue.severity)}">` +
+          `<span class="where">${escapeHtml(where.join(" · "))}</span>` +
+          `<span class="why">${escapeHtml(issue.reason)}</span>` +
+          (issue.text
+            ? `<span class="quote">${escapeHtml(issue.text)}</span>`
+            : "") +
+          `</li>`
+        );
+      })
+      .join("") +
+    `</ul>`;
+
   draft.sections.forEach((section) => {
+    matched[section.name] = true;
     const div = document.createElement("article");
     div.className = "section" + (section.needs_review ? " flagged" : "");
 
@@ -363,12 +441,14 @@ function renderSections(draft) {
       );
     }
 
+    const ownIssues = bySection[section.name];
     div.innerHTML =
       "<header>" +
       `<h4>${escapeHtml(section.name)}</h4>` +
       `<div>${badges.join(" ")}</div>` +
       "</header>" +
       `<div class="body">${escapeHtml(section.text)}</div>` +
+      (ownIssues && ownIssues.length ? issueHtml(ownIssues, false) : "") +
       (section.citations && section.citations.length
         ? `<div class="citations">Источники: ${section.citations
             .map(escapeHtml)
@@ -377,6 +457,21 @@ function renderSections(draft) {
 
     box.appendChild(div);
   });
+
+  // Замечания без привязки к разделу — после текста, а не перед ним.
+  const leftover = [];
+  Object.keys(bySection).forEach((key) => {
+    if (!matched[key]) leftover.push(...bySection[key]);
+  });
+  if (leftover.length) {
+    const rest = document.createElement("div");
+    rest.className = "unsectioned";
+    rest.innerHTML =
+      '<p class="muted small">Эти замечания проверка не привязала ' +
+      "к конкретному разделу:</p>" +
+      issueHtml(leftover, true);
+    box.appendChild(rest);
+  }
 
   if (draft.sections.some((s) => s.text.includes(NEEDS_REVIEW))) {
     const note = document.createElement("p");
@@ -398,37 +493,24 @@ function renderVerification(verification) {
   const box = $("verdict");
   box.className = "verdict " + (needsReview ? "review" : "pass");
   box.textContent = needsReview
-    ? `${verification.status}: проект требует проверки специалистом`
-    : "PASS: замечаний нет, все разделы опираются на материалы";
+    ? "Проект требует проверки специалистом"
+    : "Замечаний нет, все разделы опираются на материалы";
 
   const summary = document.createElement("p");
-  summary.className = "muted small";
+  summary.className = "muted small summary";
   summary.textContent =
     `проверено разделов: ${verification.sections_checked} · ` +
     `замечаний: ${verification.issues.length} · ` +
     `утверждений без источника: ${verification.unsupported_claims}`;
 
-  const list = $("issues");
-  list.innerHTML = "";
-
-  verification.issues.forEach((issue) => {
-    const li = document.createElement("li");
-    li.className = issue.severity;
-
-    let html = "";
-    if (issue.section) {
-      html += `<span class="where">${escapeHtml(issue.section)}</span>`;
-    }
-    html += `<span class="why">${escapeHtml(issue.reason)}</span>`;
-    if (issue.text) {
-      html += `<span class="quote">${escapeHtml(issue.text)}</span>`;
-    }
-    li.innerHTML = html;
-    list.appendChild(li);
-  });
-
-  $("verification").insertBefore(summary, list);
-  show($("verification"), true);
+  // Список замечаний рисуется внутри разделов (renderSections);
+  // здесь остаётся вердикт и счётчики. Старый счётчик убирается,
+  // чтобы повторная загрузка проекта не плодила строки.
+  const host = $("verification");
+  const previous = host.querySelector("p.summary");
+  if (previous) previous.remove();
+  host.appendChild(summary);
+  show(host, true);
 }
 
 function renderSources(sources) {
