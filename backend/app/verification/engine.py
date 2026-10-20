@@ -31,6 +31,7 @@ from app.drafting.requirements import extract_requirements
 from app.verification.jurisdiction import check_jurisdiction
 from app.verification.laws import LawRegistry, extract_fee, fee_matches, state_fee
 from app.verification.persons import check_section
+from app.verification.qualification import check_qualification
 from app.verification.subject_of_proof import ProofFact, subject_of_proof
 
 
@@ -49,6 +50,8 @@ class IssueType(StrEnum):
     CONTRADICTION = "CONTRADICTION"
     INCOMPLETE = "INCOMPLETE"
     JURISDICTION_MISMATCH = "JURISDICTION_MISMATCH"
+    CONTRACT_QUALIFICATION = "CONTRACT_QUALIFICATION"
+    ARBITRATION_JURISDICTION = "ARBITRATION_JURISDICTION"
     OBJECTIONS_UNADDRESSED = "OBJECTIONS_UNADDRESSED"
     PRETRIAL_UNADDRESSED = "PRETRIAL_UNADDRESSED"
     FEE_IN_CLAIM_PRICE = "FEE_IN_CLAIM_PRICE"
@@ -380,6 +383,35 @@ def verify_draft(
                 severity=Severity.HIGH,
                 text="",
                 reason=jur_finding.reason,
+            )
+        )
+
+    # Вопросы о квалификации договора и подведомственности (п. 3–4).
+    # Система не решает, принадлежит ли спор арбитражу, но и не молчит:
+    # признаки поставки, ИП и организации есть в материалах — вопрос
+    # выносится судье наружу, а не остаётся внутри пакета.
+    def _side_by_role(role: str) -> str:
+        marker = f" ({role})"
+        for entry in pack.participants:
+            if entry.endswith(marker):
+                return entry[: -len(marker)]
+        return ""
+
+    for qual_finding in check_qualification(
+        [item.text for item in pack.items],
+        plaintiff=_side_by_role("истец"),
+        defendant=_side_by_role("ответчик"),
+    ):
+        report.issues.append(
+            Issue(
+                type=(
+                    IssueType.ARBITRATION_JURISDICTION
+                    if qual_finding.kind == "arbitration"
+                    else IssueType.CONTRACT_QUALIFICATION
+                ),
+                severity=Severity.MEDIUM,
+                text="",
+                reason=qual_finding.reason,
             )
         )
 
