@@ -1,0 +1,415 @@
+From f74f6fbc398bea814683c37b838f505e784f357b Mon Sep 17 00:00:00 2001
+From: Eagle1man <orel198611@gmail.com>
+Date: Tue, 20 Oct 2026 23:28:09 +0300
+Subject: [PATCH 1/2] =?UTF-8?q?=D0=94=D0=BE=D1=80=D0=B0=D0=B1=D0=BE=D1=82?=
+ =?UTF-8?q?=D0=BA=D0=B0=20F1:=20=D0=BF=D0=BE=D1=88=D0=BB=D0=B8=D0=BD=D0=B0?=
+ =?UTF-8?q?=20=D0=BD=D0=B5=20=D0=B3=D0=BB=D0=BE=D1=82=D0=B0=D0=B5=D1=82=20?=
+ =?UTF-8?q?=D0=BE=D0=BA=D0=BD=D0=BE,=20=D0=BE=D0=BA=D0=BD=D0=BE=20=D0=B1?=
+ =?UTF-8?q?=D0=B5=D0=B7=20=D1=81=D1=83=D0=BC=D0=BC=D1=8B=20=D0=BD=D0=B5=20?=
+ =?UTF-8?q?=D0=B1=D0=BB=D0=BE=D0=BA=D0=B8=D1=80=D1=83=D0=B5=D1=82=20=D0=B1?=
+ =?UTF-8?q?=D0=B0=D0=B7=D1=83?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+requirements.py: пошлинный фрагмент вырезается из окна (_without_fee_fragments) вместо пропуска всего требования - real-08 восстанавливает ущерб 10400 (пошлина 416 отдельным пунктом); последующее окно с суммой обновляет базу, занятую окном без суммы - real-05 извлекает компенсацию морального вреда 1000 (совпало с манифестом). Контроль CLAIM_AMOUNT_UNPARSED расширен: срабатывает и когда требование извлеклось без сумм. Тесты test_f1_extraction.py (юнит + живые real-05/08) + тест флага для баз без сумм. Осталось честно: real-10 (1/3 часть), суммы прописью, вывод исхода за судьёй. Полный прогон: 728/0, ruff, mypy - чисто.
+---
+ backend/app/drafting/requirements.py     |  67 +++++++---
+ backend/app/verification/engine.py       |   6 +-
+ backend/tests/test_f1_extraction.py      | 163 +++++++++++++++++++++++
+ backend/tests/test_stage3_regressions.py |  18 +++
+ docs/agent-summary.md                    |  20 ++-
+ docs/end-to-end-evaluation.md            |  25 ++++
+ 6 files changed, 271 insertions(+), 28 deletions(-)
+ create mode 100644 backend/tests/test_f1_extraction.py
+
+diff --git a/backend/app/drafting/requirements.py b/backend/app/drafting/requirements.py
+index 69d94f5..342c69d 100644
+--- a/backend/app/drafting/requirements.py
++++ b/backend/app/drafting/requirements.py
+@@ -357,29 +357,35 @@ def extract_requirements(
+     # Первая строка попадает в «claims», вторая — в «evidence»
+     # (там есть слово «руб»), и без общего порядка сумма терялась.
+     for source, text in _claim_windows(_document_streams(pack)):
+-        if not looks_like_claim(text):
+-            continue
+-
+-        # Пошлина и расходы на уплату не являются требованием по
+-        # существу: они выносятся отдельным пунктом по ст. 98 ГПК РФ.
+-        # Проверка стоит ДО определения основания. Раньше она была
+-        # внутри ветки «основание не распознали», и пошлина с
+-        # распознанным основанием проскакивала в требования и
+-        # взыскивалась вместе с долгом: в деле real-08 система назвала
+-        # долгом размер пошлины и постановила взыскать 416 руб. вместо
+-        # задолженности 10 148 руб.
++        requirement_text = text
+         if _is_fee_requirement(text):
++            # Пошлина взыскивается отдельным пунктом по ст. 98 ГПК РФ
++            # и не должна занимать место требования. Прежде окно
++            # пропускалось целиком, и пошлина, стоящая в одном
++            # предложении с требованием, топила его целиком: в деле
++            # real-08 фраза «расходы по оплате госпошлины в размере
++            # 416 руб.» стояла в одной строке с ущербом 10 400 руб.,
++            # и система теряла взыскание долга, «исправив» только
++            # подмену суммы. Пошлинный фрагмент вырезается, остальное
++            # требование разбирается дальше.
++            requirement_text = _without_fee_fragments(text)
++            if not looks_like_claim(requirement_text):
++                continue
++
++        if not requirement_text.strip():
++            continue
++        if _is_fee_requirement(requirement_text):
+             continue
+ 
+-        basis = claim_basis(text)
++        basis = claim_basis(requirement_text)
+         if basis is None:
+             # Требование есть, а основание определить не удалось.
+             # Оно показывается судье, а не выбрасывается: молча
+             # потерянное требование выглядит как «исков не было».
+-            unrecognised.append(_shorten(text))
++            unrecognised.append(_shorten(requirement_text))
+             continue
+ 
+-        if payer_is_plaintiff(text):
++        if payer_is_plaintiff(requirement_text):
+             continue
+ 
+         # Признание и обязательство совершить действие денег не имеют.
+@@ -392,11 +398,19 @@ def extract_requirements(
+                 )
+             continue
+ 
+-        if basis not in money:
+-            # Копейки ищутся вместе с рублями: «5034 руб. 79 коп.» —
+-            # одна сумма, и терять вторую часть нельзя.
+-            found = _find_amount_with_kopecks(text)
+-            whole, kopecks = found if found else (None, 0)
++        # Копейки ищутся вместе с рублями: «5034 руб. 79 коп.» —
++        # одна сумма, и терять вторую часть нельзя.
++        #
++        # Первое окно базы без суммы не блокирует последующее окно с
++        # суммой. Прежде база занималась навсегда: «требования истца
++        # о компенсации морального вреда являются обоснованными»
++        # (без числа) стояло раньше окна с суммой 1000 руб. и
++        # оставляло моральный вред без суммы, хотя в иске она есть
++        # (real-05).
++        found = _find_amount_with_kopecks(requirement_text)
++        whole, kopecks = found if found else (None, 0)
++        existing = money.get(basis)
++        if existing is None or (existing.amount is None and whole is not None):
+             money[basis] = MoneyClaim(
+                 amount=whole,
+                 kopecks=kopecks,
+@@ -548,6 +562,21 @@ def _is_fee_requirement(text: str) -> bool:
+     )
+ 
+ 
++def _without_fee_fragments(text: str) -> str:
++    """Вырезать пошлинные фрагменты из окна требования.
++
++    Окно пропускалось целиком, если в нём упоминалась пошлина, но
++    пошлина часто стоит в одном предложении с денежным требованием
++    («ущерб в размере 10 400 руб., … расходы по оплате госпошлины в
++    размере 416 руб.»). Фрагмент от ближайшей границы предложения или
++    запятой до конца пошлинного упоминания удаляется; оставшийся текст
++    заново проверяется на признаки требования.
++    """
++    cleaned = re.sub(r"[^.;,]*госпошлин\w*[^.;]*", " ", text, flags=re.I)
++    cleaned = re.sub(r"\s{2,}", " ", cleaned)
++    return cleaned.strip(" \t,;")
++
++
+ def extract_parties(pack: EvidencePack) -> Parties:
+     """Названия сторон для резолютивной части.
+ 
+diff --git a/backend/app/verification/engine.py b/backend/app/verification/engine.py
+index ff3f492..4501c0a 100644
+--- a/backend/app/verification/engine.py
++++ b/backend/app/verification/engine.py
+@@ -386,9 +386,9 @@ def verify_draft(
+     )
+ 
+     # F1: молчание хуже вопроса. Если в иске есть суммы, но ни одно
+-    # требование не извлечено, судья должен увидеть пробел, а не пустую
+-    # резолютивную часть.
+-    if not money_claims:
++    # требование не извлечено — или извлечены только базы без сумм —
++    # судья должен увидеть пробел, а не пустую резолютивную часть.
++    if not any(claim.amount for claim in money_claims):
+         claim_sums = {
+             amount
+             for item in pack.items
+diff --git a/backend/tests/test_f1_extraction.py b/backend/tests/test_f1_extraction.py
+new file mode 100644
+index 0000000..fb756f2
+--- /dev/null
++++ b/backend/tests/test_f1_extraction.py
+@@ -0,0 +1,163 @@
++"""Регрессионные тесты F1: извлечение сумм, топящихся пошлиной и окнами.
++
++Два механизма потери суммы, найденных при сквозной проверке (Этап 2 ТЗ):
++
++* пошлина, стоящая в одном предложении с требованием, прежде
++  пропускала всё окно целиком — в real-08 вместе с «госпошлиной в
++  размере 416 руб.» терялся ущерб 10 400 руб.;
++* окно базы без суммы занимало базу навсегда — в real-05 фраза
++  «требования истца о компенсации морального вреда являются
++  обоснованными» (без числа) стояла раньше окна с «взыскать …
++  1000 руб.», и сумма не вставлялась.
++"""
++
++from __future__ import annotations
++
++from pathlib import Path
++
++import pytest
++
++from app.agents.evidence_pack import EvidenceItem, EvidencePack
++from app.drafting.requirements import extract_requirements
++
++ROOT = Path(__file__).resolve().parents[2]
++CASES = ROOT / "data" / "demo" / "real" / "cases"
++
++
++def _pack() -> EvidencePack:
++    return EvidencePack(case_number="T-F1")
++
++
++class TestFeeDoesNotSwallowClaim:
++    def test_fee_fragment_removed_claim_kept(self) -> None:
++        pack = _pack()
++        pack.items.append(
++            EvidenceItem(
++                category="claims",
++                text=(
++                    "Просит взыскать с ответчика ФИО материальный ущерб "
++                    "в размере 10400 руб., расходы по оплате госпошлины "
++                    "в размере 416 руб."
++                ),
++                source_document="01_claim.txt",
++                source_type="CLAIM",
++                order=1,
++            )
++        )
++        money, _others, _unrecognised = extract_requirements(pack)
++        assert [(claim.basis, claim.amount) for claim in money] == [
++            ("убытки", 10400)
++        ]
++
++    def test_fee_only_window_still_skipped(self) -> None:
++        pack = _pack()
++        pack.items.append(
++            EvidenceItem(
++                category="claims",
++                text="Истец просит взыскать госпошлину в размере 416 руб.",
++                source_document="01_claim.txt",
++                source_type="CLAIM",
++                order=1,
++            )
++        )
++        money, _others, _unrecognised = extract_requirements(pack)
++        assert money == []
++
++
++class TestSumlessWindowDoesNotBlock:
++    def test_later_window_with_sum_upgrades_amount(self) -> None:
++        pack = _pack()
++        pack.items.append(
++            EvidenceItem(
++                category="claims",
++                text=(
++                    "Потерпевший вновь обратился к ответчику с требованием "
++                    "возместить разницу. Суд считает, что требования истца "
++                    "о компенсации морального вреда являются обоснованными."
++                ),
++                source_document="01_claim.txt",
++                source_type="CLAIM",
++                order=1,
++            )
++        )
++        pack.items.append(
++            EvidenceItem(
++                category="claims",
++                text=(
++                    "Суд считает необходимым взыскать с ответчика в пользу "
++                    "истца в счет компенсации морального вреда 1000 руб."
++                ),
++                source_document="01_claim.txt",
++                source_type="CLAIM",
++                order=2,
++            )
++        )
++        money, _others, _unrecognised = extract_requirements(pack)
++        assert [(claim.basis, claim.amount) for claim in money] == [
++            ("компенсация морального вреда", 1000)
++        ]
++
++    def test_existing_amount_not_overwritten_by_none(self) -> None:
++        # Сумма, найденная по настоящему, не сбрасывается пустым окном:
++        # порядок окон в потоке не гарантия качества суммы.
++        pack = _pack()
++        pack.items.append(
++            EvidenceItem(
++                category="claims",
++                text=(
++                    "Суд считает необходимым взыскать с ответчика в пользу "
++                    "истца в счет компенсации морального вреда 1000 руб."
++                ),
++                source_document="01_claim.txt",
++                source_type="CLAIM",
++                order=1,
++            )
++        )
++        pack.items.append(
++            EvidenceItem(
++                category="claims",
++                text=(
++                    "Требования истца о компенсации морального вреда "
++                    "обоснованы, о возмещении истцом природных ценностей "
++                    "возмещать нечего."
++                ),
++                source_document="01_claim.txt",
++                source_type="CLAIM",
++                order=2,
++            )
++        )
++        money, _others, _unrecognised = extract_requirements(pack)
++        assert [(claim.basis, claim.amount) for claim in money] == [
++            ("компенсация морального вреда", 1000)
++        ]
++
++
++class TestRealCases:
++    """Живые материалы: суммы, которые прежде терялись."""
++
++    def test_real_fee_and_amount_extracted(self) -> None:
++        import importlib.util
++        import sys
++
++        spec = importlib.util.spec_from_file_location(
++            "f1t_build_real_site", ROOT / "scripts" / "build_real_site.py"
++        )
++        assert spec is not None and spec.loader is not None
++        module = importlib.util.module_from_spec(spec)
++        sys.modules["f1t_build_real_site"] = module
++        spec.loader.exec_module(module)
++
++        expected = {
++            "real-05": ("компенсация морального вреда", 1000),
++            "real-08": ("убытки", 10400),
++        }
++        for slug, (basis, amount) in expected.items():
++            case_dir = CASES / slug
++            if not (case_dir / "01_claim.txt").exists():
++                pytest.skip(f"локальные материалы {slug} отсутствуют")
++            settings = module.make_settings(case_dir)
++            settings.ensure_dirs()
++            pack = module.build_pack(case_dir, settings)
++            money, _others, _unrecognised = extract_requirements(pack)
++            found = {claim.basis: claim.amount for claim in money}
++            assert found.get(basis) == amount, f"{slug}: {found}"
+diff --git a/backend/tests/test_stage3_regressions.py b/backend/tests/test_stage3_regressions.py
+index b4a033e..78c4037 100644
+--- a/backend/tests/test_stage3_regressions.py
++++ b/backend/tests/test_stage3_regressions.py
+@@ -224,3 +224,21 @@ class TestF1UnparsedClaimAmount:
+         assert not any(
+             i.type is IssueType.CLAIM_AMOUNT_UNPARSED for i in report.issues
+         )
++
++    def test_claims_bases_without_any_amount_flagged(self) -> None:
++        # Требование извлеклось, но ни у одного пункта нет суммы
++        # (в materials суммы есть) — тот же пробел, что при пустом
++        # извлечении: судья должен это увидеть.
++        pack = EvidencePack(case_number="T-0006c")
++        pack.items.append(
++            EvidenceItem(
++                category="claims",
++                text="Просит взыскать с ответчика причинённый материальный ущерб.",
++                source_document="01_claim.txt",
++                source_type="CLAIM",
++                amounts=["10400"],
++                order=1,
++            )
++        )
++        report = verify_draft(_draft("Взыскать 150 000 руб."), pack)
++        assert any(i.type is IssueType.CLAIM_AMOUNT_UNPARSED for i in report.issues)
+diff --git a/docs/agent-summary.md b/docs/agent-summary.md
+index 6cd449c..785bc66 100644
+--- a/docs/agent-summary.md
++++ b/docs/agent-summary.md
+@@ -51,7 +51,7 @@ Push не выполнялся.
+ 
+ | Команда | Результат |
+ |---|---|
+-| `pytest -q -p no:warnings` | exit 0, **722 теста** (было 688) |
++| `pytest -q -p no:warnings` | exit 0, **722 теста** (финал после доработки F1: 728) |
+ | `ruff check app tests` | чисто |
+ | `mypy --strict app` | чисто, 66 файлов |
+ | `node --check` (demo.js, chat.js, app.js) | exit 0 |
+@@ -62,11 +62,19 @@ Push не выполнялся.
+ 
+ ## Оставшиеся дефекты и ограничения
+ 
+-1. **Извлечение требований (F1, не устранён до конца):** в real-05, real-08,
+-   real-10 сумма иска не извлекается. Сделано не «тихое молчание», а
+-   замечание HIGH `CLAIM_AMOUNT_UNPARSED` — судья видит пробел. Сама
+-   эвристика извлечения по-прежнему не находит сумму: улучшение таблицы
+-   фраз — отдельная задача, требующая ручной сверки (риск новых ошибок).
++1. **Извлечение требований (F1): закрыто частично (доработка после Этапа 3).**
++   Две механики потери суммы исправлены в `requirements.py`:
++   пошлина в одной строке с требованием не глотает окно целиком
++   (real-08: ущерб 10 400 руб. извлекается, пошлина — отдельным пунктом),
++   окно базы без суммы не блокирует последующее окно с суммой
++   (real-05: компенсация морального вреда 1000 руб. — совпало с манифестом).
++   Тесты на живых делах: `tests/test_f1_extraction.py`. Контроль
++   `CLAIM_AMOUNT_UNPARSED` срабатывает и тогда, когда требование
++   извлеклось, но без суммы. Осталось: real-10 — требование «1/3 часть
++   от суммы» честно в непознанных (пропорциональная доля); формат суммы
++   прописью («20 921 (двадцать…) рубль») не покрыт; real-08 в проекте —
++   сумма иска 10 400, суд удовлетворил частично (10 148) — вывод исхода
++   за судьёй (старое ограничение «вывод исхода», не новая ошибка).
+ 2. **F2 (НЕ ПРОВЕРЕНО):** real-03 — система взыскивает 18 390, манифест
+    11 000; какая сумма просительная, определяет человек.
+ 3. **QD-Court:** без модели и бандита (по ТЗ); полезность направлений не
+diff --git a/docs/end-to-end-evaluation.md b/docs/end-to-end-evaluation.md
+index 44662f4..44da527 100644
+--- a/docs/end-to-end-evaluation.md
++++ b/docs/end-to-end-evaluation.md
+@@ -36,6 +36,31 @@ backend\.venv\Scripts\python.exe scripts\tmp_amount_probe.py  # суммы в и
+ Для real-08 это тот самый случай «подмены сумм» из замечаний рецензента:
+ пошлина 416 извлеклась, основная сумма 10 148 — нет.
+ 
++**Доработка F1 (после Этапа 3), закрыто частично.**
++Найдены две механики потери, обе исправлены в `requirements.py`:
++
++1. *Пошлина глотала окно целиком*: окно, в котором упоминалась пошлина,
++   пропускалось без разбора. В real-08 «расходы по оплате госпошлины
++   в размере 416 руб.» стояло в одной строке с ущербом 10 400 руб. —
++   терялось всё требование. Теперь пошлинный фрагмент вырезается
++   (`_without_fee_fragments`), остаток разбирается: real-08 → ущерб
++   10 400 (пошлина — отдельным пунктом).
++2. *Окно базы без суммы занимало базу навегда*: «требования истца о
++   компенсации морального вреда являются обоснованными» (без числа)
++   стояло раньше окна «взыскать … 1000 руб.» (real-05). Теперь
++   последующее окно с суммой обновляет базу: real-05 → 1000
++   (совпало с манифестом).
++
++Покрытие: `tests/test_f1_extraction.py` (юнит-тесты + живые дела
++real-05/08), все 10 дел перепогнаны `scripts/e2e_audit.py`.
++
++Что осознанно осталось: real-10 — требование «1/3 часть от суммы»
++(пропорциональная доля) остаётся в непознанных; формат суммы прописью
++«20 921 (двадцать…) рубль» не покрывается примыканием к «руб»; сумма
++real-08 в проекте — сумма иска (10 400), суд удовлетворил частично
++(10 148): вывод исхода остаётся за судьёй, это старое ограничение
++«вывод исхода», не новая ошибка.
++
+ **F2 (НЕ ПРОВЕРЕНО): real-03 — система взыскивает 18 390, манифест 11 000.**
+ В иске есть и 11 000, и 18 390 (и другие суммы); какая из них просительная —
+ определяет человек. Система выбрала 18 390 со ссылкой на `01_claim.txt`.
+-- 
+2.53.0.windows.2
+

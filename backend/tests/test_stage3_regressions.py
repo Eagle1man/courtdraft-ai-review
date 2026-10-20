@@ -224,3 +224,21 @@ class TestF1UnparsedClaimAmount:
         assert not any(
             i.type is IssueType.CLAIM_AMOUNT_UNPARSED for i in report.issues
         )
+
+    def test_claims_bases_without_any_amount_flagged(self) -> None:
+        # Требование извлеклось, но ни у одного пункта нет суммы
+        # (в materials суммы есть) — тот же пробел, что при пустом
+        # извлечении: судья должен это увидеть.
+        pack = EvidencePack(case_number="T-0006c")
+        pack.items.append(
+            EvidenceItem(
+                category="claims",
+                text="Просит взыскать с ответчика причинённый материальный ущерб.",
+                source_document="01_claim.txt",
+                source_type="CLAIM",
+                amounts=["10400"],
+                order=1,
+            )
+        )
+        report = verify_draft(_draft("Взыскать 150 000 руб."), pack)
+        assert any(i.type is IssueType.CLAIM_AMOUNT_UNPARSED for i in report.issues)

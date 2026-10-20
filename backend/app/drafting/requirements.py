@@ -357,29 +357,35 @@ def extract_requirements(
     # Первая строка попадает в «claims», вторая — в «evidence»
     # (там есть слово «руб»), и без общего порядка сумма терялась.
     for source, text in _claim_windows(_document_streams(pack)):
-        if not looks_like_claim(text):
-            continue
-
-        # Пошлина и расходы на уплату не являются требованием по
-        # существу: они выносятся отдельным пунктом по ст. 98 ГПК РФ.
-        # Проверка стоит ДО определения основания. Раньше она была
-        # внутри ветки «основание не распознали», и пошлина с
-        # распознанным основанием проскакивала в требования и
-        # взыскивалась вместе с долгом: в деле real-08 система назвала
-        # долгом размер пошлины и постановила взыскать 416 руб. вместо
-        # задолженности 10 148 руб.
+        requirement_text = text
         if _is_fee_requirement(text):
+            # Пошлина взыскивается отдельным пунктом по ст. 98 ГПК РФ
+            # и не должна занимать место требования. Прежде окно
+            # пропускалось целиком, и пошлина, стоящая в одном
+            # предложении с требованием, топила его целиком: в деле
+            # real-08 фраза «расходы по оплате госпошлины в размере
+            # 416 руб.» стояла в одной строке с ущербом 10 400 руб.,
+            # и система теряла взыскание долга, «исправив» только
+            # подмену суммы. Пошлинный фрагмент вырезается, остальное
+            # требование разбирается дальше.
+            requirement_text = _without_fee_fragments(text)
+            if not looks_like_claim(requirement_text):
+                continue
+
+        if not requirement_text.strip():
+            continue
+        if _is_fee_requirement(requirement_text):
             continue
 
-        basis = claim_basis(text)
+        basis = claim_basis(requirement_text)
         if basis is None:
             # Требование есть, а основание определить не удалось.
             # Оно показывается судье, а не выбрасывается: молча
             # потерянное требование выглядит как «исков не было».
-            unrecognised.append(_shorten(text))
+            unrecognised.append(_shorten(requirement_text))
             continue
 
-        if payer_is_plaintiff(text):
+        if payer_is_plaintiff(requirement_text):
             continue
 
         # Признание и обязательство совершить действие денег не имеют.
@@ -392,11 +398,19 @@ def extract_requirements(
                 )
             continue
 
-        if basis not in money:
-            # Копейки ищутся вместе с рублями: «5034 руб. 79 коп.» —
-            # одна сумма, и терять вторую часть нельзя.
-            found = _find_amount_with_kopecks(text)
-            whole, kopecks = found if found else (None, 0)
+        # Копейки ищутся вместе с рублями: «5034 руб. 79 коп.» —
+        # одна сумма, и терять вторую часть нельзя.
+        #
+        # Первое окно базы без суммы не блокирует последующее окно с
+        # суммой. Прежде база занималась навсегда: «требования истца
+        # о компенсации морального вреда являются обоснованными»
+        # (без числа) стояло раньше окна с суммой 1000 руб. и
+        # оставляло моральный вред без суммы, хотя в иске она есть
+        # (real-05).
+        found = _find_amount_with_kopecks(requirement_text)
+        whole, kopecks = found if found else (None, 0)
+        existing = money.get(basis)
+        if existing is None or (existing.amount is None and whole is not None):
             money[basis] = MoneyClaim(
                 amount=whole,
                 kopecks=kopecks,
@@ -546,6 +560,21 @@ def _is_fee_requirement(text: str) -> bool:
             low,
         )
     )
+
+
+def _without_fee_fragments(text: str) -> str:
+    """Вырезать пошлинные фрагменты из окна требования.
+
+    Окно пропускалось целиком, если в нём упоминалась пошлина, но
+    пошлина часто стоит в одном предложении с денежным требованием
+    («ущерб в размере 10 400 руб., … расходы по оплате госпошлины в
+    размере 416 руб.»). Фрагмент от ближайшей границы предложения или
+    запятой до конца пошлинного упоминания удаляется; оставшийся текст
+    заново проверяется на признаки требования.
+    """
+    cleaned = re.sub(r"[^.;,]*госпошлин\w*[^.;]*", " ", text, flags=re.I)
+    cleaned = re.sub(r"\s{2,}", " ", cleaned)
+    return cleaned.strip(" \t,;")
 
 
 def extract_parties(pack: EvidencePack) -> Parties:
