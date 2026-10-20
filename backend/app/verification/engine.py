@@ -28,6 +28,11 @@ from app.agents.evidence_pack import MONTHS, EvidenceItem, EvidencePack
 from app.config import Settings
 from app.drafting.operative import DEFAULT_LEGAL_BASIS
 from app.drafting.requirements import extract_requirements
+from app.verification.evidence_assessment import (
+    AssessmentCriterion,
+    assessment_of,
+    check_evidence_assessment,
+)
 from app.verification.jurisdiction import check_jurisdiction
 from app.verification.laws import LawRegistry, extract_fee, fee_matches, state_fee
 from app.verification.persons import check_section
@@ -57,6 +62,9 @@ class IssueType(StrEnum):
     FEE_IN_CLAIM_PRICE = "FEE_IN_CLAIM_PRICE"
     STATEMENT_LIMITATION = "STATEMENT_LIMITATION"
     STATEMENT_PENALTY_REDUCTION = "STATEMENT_PENALTY_REDUCTION"
+    EVIDENCE_NOT_ASSESSED = "EVIDENCE_NOT_ASSESSED"
+    PLEADING_AS_EVIDENCE = "PLEADING_AS_EVIDENCE"
+    EXPERT_UNASSESSED = "EXPERT_UNASSESSED"
 
 
 class Severity(StrEnum):
@@ -99,6 +107,9 @@ class VerificationReport:
     # Это не замечание, а карта: судье виднее, что поставками считать,
     # поэтому в статус проверки не входит.
     facts: list[ProofFact] = field(default_factory=list)
+    # Критерии оценки доказательств (ст. 67 ГПК РФ), найденные в
+    # проекте. Тоже карта, а не замечание: оценку выносит суд.
+    assessment: list[AssessmentCriterion] = field(default_factory=list)
 
     @property
     def needs_review(self) -> bool:
@@ -119,6 +130,7 @@ class VerificationReport:
             "unsupported_claims": self.unsupported_claims,
             "by_severity": self.by_severity(),
             "subject_of_proof": [f.to_dict() for f in self.facts],
+            "evidence_assessment": [c.to_dict() for c in self.assessment],
         }
 
     def human_summary(self) -> str:
@@ -793,6 +805,33 @@ def verify_draft(
     # откуда взято каждое обстоятельство, и её нельзя подделать текстом
     # модели.
     report.facts = subject_of_proof(pack.items)
+
+    # ── Оценка доказательств (п. 5, ст. 67 ГПК РФ) ─────────────────
+    # Суд оценивает каждое доказательство по относимости, допустимости
+    # и достоверности, а все в совокупности — по достаточности. Система
+    # оценку не выносит: она показывает, какие критерии нашлись в
+    # проекте, а какие нет, и выносит вопросы наружу — позицию стороны,
+    # выданную за доказательство, и заключение эксперта, принятое без
+    # оценки наравне с другими (ч. 3 ст. 86 ГПК РФ).
+    report.assessment = assessment_of(draft_text)
+
+    assessment_issues = {
+        "pleading_as_evidence": (IssueType.PLEADING_AS_EVIDENCE, Severity.HIGH),
+        "expert_unassessed": (IssueType.EXPERT_UNASSESSED, Severity.MEDIUM),
+        "not_assessed": (IssueType.EVIDENCE_NOT_ASSESSED, Severity.MEDIUM),
+    }
+    for assessment_finding in check_evidence_assessment(
+        draft_text, [item.text for item in pack.items]
+    ):
+        issue_type, severity = assessment_issues[assessment_finding.kind]
+        report.issues.append(
+            Issue(
+                type=issue_type,
+                severity=severity,
+                text=assessment_finding.evidence,
+                reason=assessment_finding.reason,
+            )
+        )
 
     # ── Итоговый статус ────────────────────────────────────────────
     critical = [i for i in report.issues if i.severity is Severity.CRITICAL]
