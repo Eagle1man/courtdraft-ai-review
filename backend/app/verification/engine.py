@@ -51,6 +51,7 @@ class IssueType(StrEnum):
     JURISDICTION_MISMATCH = "JURISDICTION_MISMATCH"
     OBJECTIONS_UNADDRESSED = "OBJECTIONS_UNADDRESSED"
     PRETRIAL_UNADDRESSED = "PRETRIAL_UNADDRESSED"
+    FEE_IN_CLAIM_PRICE = "FEE_IN_CLAIM_PRICE"
 
 
 class Severity(StrEnum):
@@ -165,6 +166,19 @@ _LAW_RE = re.compile(
     r"(?:ст\.|стат(?:ьёй|ьей|ье|ьи|ью|ьями|ьях|ьям|ьё|и)\.?)\s*"
     r"(\d+(?:\s*(?:,|и)\s*\d+)*)"
     r"\s*(?:([А-ЯЁ][А-ЯЁ ]{0,12}?)(?:РФ|кодекс))?",
+    re.IGNORECASE,
+)
+
+#: Госпошлина в цене иска: «150 000 руб., включая госпошлину».
+#: Ч. 1 ст. 91 ГПК РФ относит госпошлину к судебным расходам, а не
+#: к цене иска: цена определяется по требованию без пошлины, и
+#: «включая» завышает цену и расчёт пошлины (ст. 333.19 НК РФ).
+#: Между префиксом и «пошлин» допускается до 25 символов: «госпошлину»,
+#: «государственную пошлину», «государственную пошлину (НК РФ)».
+_FEE_IN_PRICE_RE = re.compile(
+    r"включ\w*\s+[^.]{0,25}пошлин"
+    r"|в\s+том\s+числе\s+[^.]{0,25}пошлин"
+    r"|с\s+уч[её]том\s+[^.]{0,25}пошлин",
     re.IGNORECASE,
 )
 
@@ -618,6 +632,34 @@ def verify_draft(
                     "в материалах дела условие о досудебном "
                     "(претензионном) порядке урегулирования, проект не "
                     "отражает, соблюдён ли он (ст. 132, 135, 222 ГПК РФ)"
+                ),
+            )
+        )
+
+    # ── Госпошлина в цене иска (ч. 1 ст. 91 ГПК РФ) ────────────────
+    # «Цена иска 150 000 руб., включая госпошлину»: пошлина — судебный
+    # расход (ст. 98 ГПК РФ), а не часть цены иска. Завышенная цена
+    # иска искажает расчёт самой пошлины по ст. 333.19 НК РФ, поэтому
+    # ошибка касается и резолютивной части.
+    fee_in_price = _FEE_IN_PRICE_RE.search(draft_text)
+    if fee_in_price is None:
+        for item in pack.by_category("claims"):
+            fee_in_price = _FEE_IN_PRICE_RE.search(item.text)
+            if fee_in_price:
+                break
+    if fee_in_price:
+        matched = fee_in_price.string
+        report.issues.append(
+            Issue(
+                type=IssueType.FEE_IN_CLAIM_PRICE,
+                severity=Severity.MEDIUM,
+                text=matched[
+                    max(0, fee_in_price.start() - 60) : fee_in_price.start() + 80
+                ],
+                reason=(
+                    "госпошлина указана включённой в цену иска: по ч. 1 "
+                    "ст. 91 ГПК РФ цена иска определяется без госпошлины, "
+                    "госпошлина — судебный расход (ст. 98 ГПК РФ)"
                 ),
             )
         )
