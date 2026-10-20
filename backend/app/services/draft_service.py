@@ -131,7 +131,7 @@ class DraftService:
         saved = await self.save_pack(case_id, pack)
         logger.info("Пакет доказательств: %d фактов", saved)
 
-        template = load_template()
+        template = load_template(name=template_name)
         draft_result = await generate_draft(pack, template, provider=provider)
 
         report = verify_draft(draft_result, pack)

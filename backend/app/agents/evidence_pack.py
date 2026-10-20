@@ -150,10 +150,19 @@ class EvidencePack:
         return "\n".join(lines)
 
 
-def load_template(settings: Settings | None = None) -> dict[str, Any]:
-    """Загрузить шаблон решения."""
+def load_template(
+    settings: Settings | None = None, *, name: str = "civil_judgment"
+) -> dict[str, Any]:
+    """Загрузить шаблон судебного акта по имени.
+
+    ``world_judgment`` — вариант для мирового судьи (ч. 3–4 ст. 199
+    ГПК РФ): стороны получают резолютивную часть, мотивированное
+    решение составляется по заявлению.
+    """
+    if not name.replace("_", "").isalnum():
+        raise ValueError(f"Недопустимое имя шаблона: {name}")
     cfg = settings or get_settings()
-    path = cfg.templates_dir / "civil_judgment.json"
+    path = cfg.templates_dir / f"{name}.json"
     if not path.exists():
         raise FileNotFoundError(f"Шаблон не найден: {path}")
     parsed: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))

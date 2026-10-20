@@ -111,7 +111,9 @@ class DraftGenerateIn(BaseModel):
     """Запрос на формирование проекта."""
 
     template_name: str = Field(
-        default="civil_judgment", max_length=100, examples=["civil_judgment"]
+        default="civil_judgment",
+        max_length=100,
+        examples=["civil_judgment", "world_judgment"],
     )
     # Кто инициировал: попадает в аудит и в автора версии.
     actor: str = Field(default="judge", max_length=60)
