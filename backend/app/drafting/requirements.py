@@ -31,6 +31,7 @@ from __future__ import annotations
 import re
 
 from app.agents.claim_phrases import (
+    CLAIM_VERB_RE,
     NON_MONEY_BASES,
     claim_basis,
     looks_like_claim,
@@ -365,11 +366,25 @@ def extract_requirements(
             # предложении с требованием, топила его целиком: в деле
             # real-08 фраза «расходы по оплате госпошлины в размере
             # 416 руб.» стояла в одной строке с ущербом 10 400 руб.,
-            # и система теряла взыскание долга, «исправив» только
-            # подмену суммы. Пошлинный фрагмент вырезается, остальное
-            # требование разбирается дальше.
+            # и система теряла взыскание долга. Пошлинные куски
+            # вырезаются (по предложениям, запятым и союзам), остаток
+            # разбирается дальше. Вырезание повторяется, потому что
+            # пошлина встречается разными формами («госпошлина»,
+            # «судебные расходы», «расходы по уплате пошлины»).
             requirement_text = _without_fee_fragments(text)
-            if not looks_like_claim(requirement_text):
+            for _ in range(2):
+                if not _is_fee_requirement(requirement_text):
+                    break
+                requirement_text = _without_fee_fragments(requirement_text)
+            if not requirement_text or not looks_like_claim(requirement_text):
+                # Чисто пошлинное окно (пустой остаток) — не требование
+                # по существу, выбрасывается по-прежнему. Если же в
+                # остатке есть число из материалов, но не похоже на
+                # требование, — не молчим: фрагмент показывается
+                # судье, иначе вырезание снова превращается в тихую
+                # потерю суммы.
+                if requirement_text and re.search(r"\d", requirement_text):
+                    unrecognised.append(_shorten(requirement_text))
                 continue
 
         if not requirement_text.strip():
@@ -544,6 +559,47 @@ def extract_budget(pack: EvidencePack) -> str:
     return ""
 
 
+# Признаки пошлины и судебных расходов — общие для проверки окна
+# (_is_fee_requirement) и для вырезания (_without_fee_fragments):
+# один источник, чтобы вырезание не расходилось с проверкой.
+_FEE_MARKERS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"госпошлин\w*", re.I),
+    re.compile(r"судебн\w*\s+расход\w*|судебн\w*\s+издержк\w*", re.I),
+    re.compile(
+        r"расход\w*\s+(?:на|по)\s+(?:уплат\w+\s+)?"
+        r"(?:государственн\w*\s+)?пошлин",
+        re.I,
+    ),
+)
+
+# Окно режется по границам, на которых можно безопасно отделить
+# пошлину от денежного требования: конец предложения, запятая,
+# сочинительные союзы «и» и «а также» (перечисление требований).
+# Граница предложения — только если дальше заглавная: сокращения
+# вроде «416 руб. 00 коп.» иначе расщепляются, и копейки от
+# пошлины приклеиваются к соседней сумме.
+_FEE_CHUNK_SPLIT = re.compile(
+    r"((?<=[.;])\s+(?=[А-ЯЁ])|,\s*|\s+и\s+|\s+а\s+также\s+)",
+    re.I,
+)
+
+
+def _fee_marker_span(text: str) -> re.Match[str] | None:
+    """Самый ранний признак пошлины/судебных расходов в тексте окна.
+
+    Взять нужно первый по позиции, а не первый по списку: «расходы
+    по уплате государственной пошлины» содержит и «госпошлин», но
+    обрезать надо от начала всей конструкции, иначе после вырезания
+    останется огрызок «расходы по уплате государственной».
+    """
+    earliest: re.Match[str] | None = None
+    for marker in _FEE_MARKERS:
+        match = marker.search(text)
+        if match is not None and (earliest is None or match.start() < earliest.start()):
+            earliest = match
+    return earliest
+
+
 def _is_fee_requirement(text: str) -> bool:
     """Требование о пошлине или судебных расходах.
 
@@ -551,29 +607,63 @@ def _is_fee_requirement(text: str) -> bool:
     взыскивается отдельным пунктом по ст. 98 ГПК РФ, а в списке
     требований по существу она не должна занимать место.
     """
-    low = text.lower()
-    return bool(
-        re.search(r"госпошлин\w*|судебн\w*\s+расход\w*", low)
-        or re.search(
-            r"расход\w*\s+(?:на|по)\s+(?:уплат\w+\s+)?"
-            r"(?:государственн\w*\s+)?пошлин",
-            low,
-        )
-    )
+    return _fee_marker_span(text) is not None
 
 
 def _without_fee_fragments(text: str) -> str:
-    """Вырезать пошлинные фрагменты из окна требования.
+    """Вырезать пошлинные куски из окна требования.
 
-    Окно пропускалось целиком, если в нём упоминалась пошлина, но
-    пошлина часто стоит в одном предложении с денежным требованием
-    («ущерб в размере 10 400 руб., … расходы по оплате госпошлины в
-    размере 416 руб.»). Фрагмент от ближайшей границы предложения или
-    запятой до конца пошлинного упоминания удаляется; оставшийся текст
-    заново проверяется на признаки требования.
+    Раньше окно пропускалось целиком, если в нём упоминалась пошлина,
+    но пошлина часто стоит в одном перечислении с денежными
+    требованиями («ущерб в размере 10 400 руб., расходы по оплате
+    госпошлины в размере 416 руб.») — и вместе с окном терялось само
+    требование (real-08).
+
+    Теперь окно режется по границам из _FEE_CHUNK_SPLIT; кусок
+    выкидывается, если содержит признак пошлины. Когда признак стоит
+    в середине куска без собственных границ («взыскать госпошлину и
+    ущерб»), кусок обрезается до признака: «взыскать» остаётся,
+    пошлина уходит. Остаток без признаков требования и без числа
+    (огрызок вроде «расходы по оплате») выбрасывается — он вошёл бы
+    в окно мусором. Если после вырезания остаток перестал быть
+    похож на требование, вызывающий код не молчит: показывает
+    фрагмент судье как нераспознанный.
     """
-    cleaned = re.sub(r"[^.;,]*госпошлин\w*[^.;]*", " ", text, flags=re.I)
-    cleaned = re.sub(r"\s{2,}", " ", cleaned)
+    chunks = _FEE_CHUNK_SPLIT.split(text)
+    parsed: list[tuple[str, re.Match[str] | None, str]] = []
+    for index in range(0, len(chunks), 2):
+        segment = chunks[index].strip()
+        carry = chunks[index - 1] if index > 0 else ""
+        if not segment:
+            continue
+        parsed.append((segment, _fee_marker_span(segment), carry))
+    # Цифры вне пошлинных кусков: пошлина стоит в одном перечислении
+    # с денежным требованием. Огрызок «взыскать» сохраняется только
+    # при таком соседе — иначе в окне была одна пошлина, и обрезанный
+    # глагол превратился бы в шум в списке непознанных.
+    neighbour_digits = re.compile(r"\d")
+    has_neighbour_digits = any(
+        neighbour_digits.search(segment)
+        for segment, marker, _carry in parsed
+        if marker is None
+    )
+    kept: list[str] = []
+    for segment, marker, carry in parsed:
+        if marker is None:
+            kept.append((carry if kept else "") + segment)
+            continue
+        remainder = segment[: marker.start()].rstrip(" \t,;")
+        if remainder and neighbour_digits.search(remainder):
+            # Признак в середине куска с суммой до него: «взыскать
+            # долг 5000 руб госпошлину» → хвост отрезается, долг
+            # остаётся.
+            kept.append((carry if kept else "") + remainder)
+        elif remainder and CLAIM_VERB_RE.search(remainder) and has_neighbour_digits:
+            # «взыскать госпошлину и ущерб 10400 руб.» → «взыскать и
+            # ущерб»: глагол требования надо сохранить, рядом есть
+            # требование с суммой.
+            kept.append((carry if kept else "") + remainder)
+    cleaned = re.sub(r"\s{2,}", " ", "".join(kept))
     return cleaned.strip(" \t,;")
 
 

@@ -49,6 +49,68 @@ class TestFeeDoesNotSwallowClaim:
             ("убытки", 10400)
         ]
 
+    def test_fee_without_separator_keeps_claim(self) -> None:
+        # D1: раньше жадная голова regexp съедала всё от начала окна,
+        # если перед пошлиной не было запятой — «взыскать госпошлину и
+        # ущерб 10400 руб.» пропадало целиком и молча.
+        pack = _pack()
+        pack.items.append(
+            EvidenceItem(
+                category="claims",
+                text="Взыскать госпошлину и ущерб 10400 руб.",
+                source_document="01_claim.txt",
+                source_type="CLAIM",
+                order=1,
+            )
+        )
+        money, _others, unrecognised = extract_requirements(pack)
+        assert [(claim.basis, claim.amount) for claim in money] == [
+            ("убытки", 10400)
+        ]
+        assert unrecognised == []
+
+    def test_fee_payment_form_keeps_debt(self) -> None:
+        # D3 (форма «расходы по уплате … пошлины» не вырезалась
+        # общим regexp и топила окно целиком).
+        pack = _pack()
+        pack.items.append(
+            EvidenceItem(
+                category="claims",
+                text=(
+                    "Взыскать долг 5000 руб., расходы по уплате "
+                    "государственной пошлины в размере 400 руб."
+                ),
+                source_document="01_claim.txt",
+                source_type="CLAIM",
+                order=1,
+            )
+        )
+        money, _others, _unrecognised = extract_requirements(pack)
+        assert [(claim.basis, claim.amount) for claim in money] == [
+            ("задолженность по договору", 5000)
+        ]
+
+    def test_court_costs_form_keeps_claim(self) -> None:
+        # D3 (форма «судебные расходы» в перечислении после «а также»).
+        pack = _pack()
+        pack.items.append(
+            EvidenceItem(
+                category="claims",
+                text=(
+                    "Просит взыскать с ответчика материальный ущерб в "
+                    "размере 10400 руб., а также судебные расходы на "
+                    "оплату экспертизы в размере 6000 руб."
+                ),
+                source_document="01_claim.txt",
+                source_type="CLAIM",
+                order=1,
+            )
+        )
+        money, _others, _unrecognised = extract_requirements(pack)
+        assert [(claim.basis, claim.amount) for claim in money] == [
+            ("убытки", 10400)
+        ]
+
     def test_fee_only_window_still_skipped(self) -> None:
         pack = _pack()
         pack.items.append(
@@ -60,8 +122,10 @@ class TestFeeDoesNotSwallowClaim:
                 order=1,
             )
         )
-        money, _others, _unrecognised = extract_requirements(pack)
+        money, _others, unrecognised = extract_requirements(pack)
         assert money == []
+        # чисто пошлинное окно не загромождает непознанное
+        assert unrecognised == []
 
 
 class TestSumlessWindowDoesNotBlock:
