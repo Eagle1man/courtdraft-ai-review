@@ -95,14 +95,14 @@ class TestVerification:
 
 
 class TestNoveltyFilter:
-    def test_duplicate_rejected(self, tmp_path) -> None:
+    def test_repeated_run_does_not_grow_archive(self, tmp_path) -> None:
         service = _service(tmp_path)
-        service.run("T-0001", _pack())
-        first = service.run("T-0001", _pack())
-        statuses = {h.status for h in first.hypotheses}
-        assert HypothesisStatus.REJECTED in statuses
-        rejected = [h for h in first.hypotheses if h.status is HypothesisStatus.REJECTED]
-        assert all("повтор" in h.rejection_reason for h in rejected)
+        first_run = service.run("T-0001", _pack())
+        second_run = service.run("T-0001", _pack())
+        assert len(second_run.hypotheses) == len(first_run.hypotheses)
+        # Ни одного дубля текста: повторная генерация не раздувает архив.
+        texts = [h.text for h in second_run.hypotheses]
+        assert len(texts) == len(set(texts))
 
 
 class TestBudget:
@@ -175,6 +175,36 @@ class TestBoilerplateFilter:
         objection_directions = [h for h in directions if h.kind == "objection_coverage"]
         assert all("56 ГПК" not in h.text for h in objection_directions)
         assert all("не поступило" not in h.text for h in objection_directions)
+
+
+class TestMutationSupersedesParent:
+    def test_mutation_replaces_parent(self) -> None:
+        from app.exploration.archive import admit
+
+        parent = Hypothesis(
+            id="p1",
+            case_id="T-0001",
+            question_id="q1",
+            kind="objection_coverage",
+            text="направление: разобрать довод «не согласен с долгом»",
+            sources=["02_response.txt"],
+            novelty=0.9,
+            status=HypothesisStatus.SUPPORTED,
+        )
+        child = Hypothesis(
+            id="c1",
+            case_id="T-0001",
+            question_id="q1",
+            kind="objection_coverage",
+            text=parent.text + " Уточнение: «долг не признан»",
+            sources=["02_response.txt"],
+            parent_ids=["p1"],
+            novelty=0.2,
+            status=HypothesisStatus.SUPPORTED,
+        )
+        result = admit([parent], child)
+        assert any(h.id == "c1" for h in result)
+        assert next(h for h in result if h.id == "p1").status is HypothesisStatus.SUPERSEDED
 
 
 class TestHypothesisModel:

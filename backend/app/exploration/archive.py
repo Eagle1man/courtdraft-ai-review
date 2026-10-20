@@ -79,6 +79,19 @@ def admit(
     ):
         return result
 
+    rival = next(
+        (h for h in result if h.question_id == candidate.question_id), None
+    )
+
+    # Мутация уточняет РОДИТЕЛЯ: это то же направление, а не новый
+    # повтор, поэтому новизна здесь не порог, а версия замещает родителя.
+    if rival is not None and rival.id in candidate.parent_ids:
+        rival.status = HypothesisStatus.SUPERSEDED
+        rival.rejection_reason = f"уточнена версией {candidate.id}"
+        rival.updated_at = now
+        result.append(candidate)
+        return result
+
     if candidate.novelty < threshold:
         candidate.status = HypothesisStatus.REJECTED
         candidate.rejection_reason = (
@@ -88,9 +101,6 @@ def admit(
         result.append(candidate)
         return result
 
-    rival = next(
-        (h for h in result if h.question_id == candidate.question_id), None
-    )
     if rival is not None and rival.novelty >= candidate.novelty:
         candidate.status = HypothesisStatus.REJECTED
         candidate.rejection_reason = (

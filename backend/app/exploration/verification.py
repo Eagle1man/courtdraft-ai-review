@@ -30,11 +30,20 @@ class HypothesisVerifier:
         known = self.known_documents(pack)
         numbers = self.material_numbers(pack)
 
+        # Цифры в именах документов («05_protocol.txt» → «5») — не числа
+        # дела: иначе мутация со ссылкой на источник отклонялась бы
+        # сама собой.
+        doc_digits = {
+            value.lstrip("0") or "0"
+            for source in known
+            for value in _NUM_RE.findall(source)
+        }
+
         sources_exist = all(source in known for source in hypothesis.sources)
         own_numbers = {
             value.lstrip("0") or "0"
             for value in _NUM_RE.findall(hypothesis.text)
-        }
+        } - doc_digits
         numbers_ok = all(value in numbers for value in own_numbers)
 
         hypothesis.checks = {
