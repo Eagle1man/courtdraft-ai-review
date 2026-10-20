@@ -89,10 +89,22 @@ class DraftResult:
         return [s for s in self.sections if s.needs_review]
 
     def sources(self) -> list[str]:
+        """Источники проекта, по одному на документ.
+
+        Раньше дедупликация шла по полной строке цитаты, и один и тот же
+        договор считался двумя источниками, когда на него ссылались с
+        разными страницами («03_contract.txt» и «03_contract.txt, стр. 3»).
+        Счётчик «источников» расходился с числом документов, и судья видел
+        в проекте больше доказательств, чем их в деле. Ключом берётся имя
+        документа до запятой — страница остаётся в первой встречной цитате.
+        """
         out: list[str] = []
+        seen: set[str] = set()
         for section in self.sections:
             for citation in section.citations:
-                if citation not in out:
+                base = citation.split(",")[0].strip()
+                if base and base not in seen:
+                    seen.add(base)
                     out.append(citation)
         return out
 
