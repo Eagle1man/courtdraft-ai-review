@@ -36,7 +36,7 @@ NO_LAW_FOUND = "Норма права не найдена. Требуется п
 
 # Разделы, которые собираются по правилам, а не генерируются моделью.
 # Ключи совпадают с ключами шаблона data/templates/civil_judgment.json.
-RULES_BUILT_SECTIONS = frozenset({"operative", "objections"})
+RULES_BUILT_SECTIONS = frozenset({"operative", "objections", "introductory"})
 
 SYSTEM_PROMPT = """Ты — помощник судьи. Пишешь ТОЛЬКО текст одного раздела решения суда.
 
@@ -391,6 +391,61 @@ def _build_operative_section(section: dict[str, Any], pack: EvidencePack) -> Sec
     )
 
 
+def _side_name(pack: EvidencePack, role: str) -> str:
+    """Имя стороны из пакета: «ФИО (роль)» → ФИО при совпадении роли."""
+    marker = f" ({role})"
+    for entry in pack.participants:
+        if entry.endswith(marker):
+            return entry[: -len(marker)]
+    return ""
+
+
+def _build_intro_section(section: dict[str, Any], pack: EvidencePack) -> SectionDraft:
+    """Вводная часть по ч. 2 ст. 198 ГПК РФ — правилами, не моделью.
+
+    Рецензент (п. 11.1): в демо вводная пустая, хотя суд, номер дела и
+    стороны есть в карточке. Модель на 1,5B реквизиты теряла, а
+    выдумывать состав суда и дату решения нельзя — их в материалах нет.
+    Всё известное из пакета ставится строкой; чего в материалах нет —
+    честной отметкой, которую судья заполнит сам.
+    """
+    lines: list[str] = ["Именем Российской Федерации", ""]
+    if pack.court_name:
+        lines.append(pack.court_name)
+    if pack.case_number:
+        lines.append(f"Дело № {pack.case_number}")
+    lines.append("")
+
+    for role in ("истец", "ответчик"):
+        name = _side_name(pack, role)
+        lines.append(f"{role.capitalize()}: {name or NEEDS_REVIEW}")
+
+    claims = pack.by_category("claims")
+    if claims:
+        subject = claims[0].text.strip()
+        if len(subject) > 400:
+            subject = subject[:400].rstrip() + "…"
+        lines.append(f"Предмет спора: {subject}")
+    else:
+        lines.append(f"Предмет спора: {NEEDS_REVIEW}")
+
+    # Состав суда, секретарь и дата решения — реквизиты судебного акта,
+    # которых нет ни в иске, ни в договоре. Модели они недоступны, а
+    # без отметки выглядели бы как уже заполненные.
+    lines.append(f"Состав суда: {NEEDS_REVIEW}")
+    lines.append(f"Секретарь судебного заседания: {NEEDS_REVIEW}")
+    lines.append(f"Дата принятия решения: {NEEDS_REVIEW}")
+
+    return SectionDraft(
+        key=section["key"],
+        name=section["name"],
+        text="\n".join(lines),
+        # Реквизиты взяты из материалов, а не из заглушки модели.
+        is_mock=False,
+        needs_review=True,
+    )
+
+
 def _build_objections_section(
     section: dict[str, Any], pack: EvidencePack
 ) -> SectionDraft:
@@ -520,12 +575,14 @@ async def generate_draft(
     started = time.perf_counter()
 
     for section in sections_to_do:
-        # Резолютивная и «Доводы ответчика» — правилами, не моделью.
+        # Резолютивная, «Доводы ответчика» и вводная — правилами, не моделью.
         if section["key"] in RULES_BUILT_SECTIONS:
             if section["key"] == "operative":
                 result.sections.append(_build_operative_section(section, pack))
-            else:
+            elif section["key"] == "objections":
                 result.sections.append(_build_objections_section(section, pack))
+            else:
+                result.sections.append(_build_intro_section(section, pack))
             continue
 
         request_text, citations = build_section_prompt(section, pack)
