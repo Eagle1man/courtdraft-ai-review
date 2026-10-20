@@ -50,6 +50,7 @@ class IssueType(StrEnum):
     INCOMPLETE = "INCOMPLETE"
     JURISDICTION_MISMATCH = "JURISDICTION_MISMATCH"
     OBJECTIONS_UNADDRESSED = "OBJECTIONS_UNADDRESSED"
+    PRETRIAL_UNADDRESSED = "PRETRIAL_UNADDRESSED"
 
 
 class Severity(StrEnum):
@@ -575,9 +576,9 @@ def verify_draft(
     # нарушение состязательности, по которому в реальном процессе
     # решение отменяют. Замечание ставится один раз на весь проект,
     # а не на раздел: обсуждать возражения можно в любом разделе.
+    draft_text = "\n".join(s.text for s in draft.sections).lower()
     objection_texts = [i.text for i in pack.items if i.category == "objections"]
     if objection_texts:
-        draft_text = "\n".join(s.text for s in draft.sections).lower()
         markers = (
             "довод", "возраж", "отклон", "не согласн", "оспор",
             "приняты во внимание", "подтверждаются материалами",
@@ -595,6 +596,31 @@ def verify_draft(
                     ),
                 )
             )
+
+    # ── Досудебный порядок (ст. 132, 135, 222 ГПК РФ) ──────────────
+    # Договор или закон могут требовать претензионный порядок до суда,
+    # и это условие рассмотрения иска. Если условие в материалах есть,
+    # а проект молчит о соблюдении — судья не видит вопроса, который
+    # надо разрешить до существа спора. Материалы без условия молчат
+    # тоже: претензии нет ни в договоре, ни в иске — нечего проверять.
+    pretrial_items = [
+        item
+        for item in pack.items
+        if "досудебн" in item.text.lower() or "претензи" in item.text.lower()
+    ]
+    if pretrial_items and "досудебн" not in draft_text and "претензи" not in draft_text:
+        report.issues.append(
+            Issue(
+                type=IssueType.PRETRIAL_UNADDRESSED,
+                severity=Severity.HIGH,
+                text=pretrial_items[0].text[:200],
+                reason=(
+                    "в материалах дела условие о досудебном "
+                    "(претензионном) порядке урегулирования, проект не "
+                    "отражает, соблюдён ли он (ст. 132, 135, 222 ГПК РФ)"
+                ),
+            )
+        )
 
     # ── Таблица «обстоятельство — доказательства» ──────────────────
     # Считается по материалам, а не по проекту: она отвечает на вопрос,
