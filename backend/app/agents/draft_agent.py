@@ -103,6 +103,9 @@ class DraftResult:
         for section in self.sections:
             for citation in section.citations:
                 base = citation.split(",")[0].strip()
+                # Страница в скобках — вариант того же документа
+                # (дефект D1): «03.txt» и «03.txt (стр. 3)» — один источник.
+                base = re.sub(r"\s*\(стр\.\s*\d+\)\s*$", "", base).strip()
                 if base and base not in seen:
                     seen.add(base)
                     out.append(citation)

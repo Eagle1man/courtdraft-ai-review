@@ -65,6 +65,8 @@ class IssueType(StrEnum):
     EVIDENCE_NOT_ASSESSED = "EVIDENCE_NOT_ASSESSED"
     PLEADING_AS_EVIDENCE = "PLEADING_AS_EVIDENCE"
     EXPERT_UNASSESSED = "EXPERT_UNASSESSED"
+    CLAIM_AMOUNT_UNPARSED = "CLAIM_AMOUNT_UNPARSED"
+    CITATION_DANGLING = "CITATION_DANGLING"
 
 
 class Severity(StrEnum):
@@ -382,6 +384,52 @@ def verify_draft(
     claim_total = sum(
         float(claim.amount or 0) for claim in money_claims if claim.amount is not None
     )
+
+    # F1: молчание хуже вопроса. Если в иске есть суммы, но ни одно
+    # требование не извлечено, судья должен увидеть пробел, а не пустую
+    # резолютивную часть.
+    if not money_claims:
+        claim_sums = {
+            amount
+            for item in pack.items
+            if item.category == "claims" and item.amounts
+            for amount in item.amounts
+        }
+        if claim_sums:
+            report.issues.append(
+                Issue(
+                    type=IssueType.CLAIM_AMOUNT_UNPARSED,
+                    severity=Severity.HIGH,
+                    text="",
+                    reason=(
+                        "в материалах есть суммы требований, но ни одно "
+                        "требование не извлечено в проект — проверить "
+                        "вручную, какая сумма подлежит взысканию"
+                    ),
+                )
+            )
+
+    # D2: ссылка резолютивной части на документ, которого нет в материалах.
+    known_documents = {
+        item.source_document for item in pack.items if item.source_document
+    }
+    for section in draft.sections:
+        if section.key != "operative":
+            continue
+        for citation in section.citations:
+            base = citation.split(",")[0].strip()
+            if base and base not in known_documents:
+                report.issues.append(
+                    Issue(
+                        type=IssueType.CITATION_DANGLING,
+                        severity=Severity.LOW,
+                        text=citation,
+                        reason=(
+                            "ссылка на документ, которого нет в материалах "
+                            "дела: возможно, опечатка в имени файла"
+                        ),
+                    )
+                )
 
     # Родовая подсудность сверяется с судом из материалов: расхождение
     # между ценой иска и инстанцией — то, что судья должен увидеть до
@@ -757,7 +805,11 @@ def verify_draft(
             low = item.text.lower()
             if any(needle in low for needle in needles):
                 return item
-        return party_statements[0] if party_statements else None
+        # Ни один фрагмент не содержит маркер целиком (он собран из
+        # разных фрагментов) — источником считаем «неизвестно», а не
+        # первый фрагмент: цитата обязана указывать на заявление, иначе
+        # судья увидит неверную ссылку (дефект D3).
+        return None
 
     # Корень «давност» ловит все падежи («о пропуске срока исковой
     # давности», «давност»); точные фразы падежами разъезжались.
@@ -779,11 +831,13 @@ def verify_draft(
 
     # Снижение неустойки: корни «сниж»/«уменьш» плюс прямая ссылка на
     # ст. 333 ГК. Самого слова «неустойка» мало — ответчик может жаловаться
-    # на размер долга, не прося снижения.
+    # на размер долга, не прося снижения. «333» ищется как статья
+    # («ст. 333»), а не как число: иначе сумма «333 рубля» давала ложное
+    # замечание (дефект D4).
     reduction_requested = "неустойк" in statement_text and (
         "сниж" in statement_text
         or "уменьш" in statement_text
-        or "333" in statement_text
+        or re.search(r"ст\.?\s*333", statement_text)
     )
     if reduction_requested and "неустойк" not in draft_text and "333" not in draft_text:
         source = _find_statement("сниж", "уменьш", "333")
