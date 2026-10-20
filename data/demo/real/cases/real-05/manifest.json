@@ -1,0 +1,42 @@
+{
+  "warning": "ОБЕЗЛИЧЕННОЕ РЕАЛЬНОЕ СУДЕБНОЕ РЕШЕНИЕ из открытого корпуса решений (Hugging Face: TryDotAtwo/russian-legal-ner). Персональные данные удалены скриптом.",
+  "case_number": "REAL-05",
+  "court": "Мировой судья судебного участка № 153 Самарской области ФИО",
+  "category": "вред здоровью",
+  "hearing_date": "2012–2013",
+  "plaintiff": "Организация",
+  "defendant": "ФИО",
+  "claim_amount": 1000.0,
+  "documents": [
+    {
+      "filename": "00_case_info.txt",
+      "title": "СВЕДЕНИЯ О ДЕЛЕ",
+      "document_type": "CASE_INFO",
+      "characters": 194
+    },
+    {
+      "filename": "01_claim.txt",
+      "title": "ИСКОВОЕ ЗАЯВЛЕНИЕ ИСТЦА",
+      "document_type": "CLAIM",
+      "characters": 4842
+    },
+    {
+      "filename": "02_response.txt",
+      "title": "ВОЗРАЖЕНИЯ ОТВЕТЧИКА",
+      "document_type": "RESPONSE",
+      "characters": 398
+    },
+    {
+      "filename": "05_protocol.txt",
+      "title": "ХОД СУДЕБНОГО ЗАСЕДАНИЯ",
+      "document_type": "PROTOCOL",
+      "characters": 6556
+    },
+    {
+      "filename": "06_court_findings.txt",
+      "title": "ОБСТОЯТЕЛЬСТВА, УСТАНОВЛЕННЫЕ СУДОМ",
+      "document_type": "FINDINGS",
+      "characters": 25614
+    }
+  ]
+}

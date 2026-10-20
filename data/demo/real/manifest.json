@@ -1,0 +1,42 @@
+{
+  "warning": "ОБЕЗЛИЧЕННОЕ РЕАЛЬНОЕ СУДЕБНОЕ РЕШЕНИЕ — ЛОКАЛЬНОЕ ДЕМО. Данные не подлежат публикации: лицензия корпуса решений не определяет права на распространение.",
+  "case_number": "REAL-001",
+  "court": "Суд общей юрисдикции (обезличено)",
+  "category": "жилищно-коммунальные споры",
+  "hearing_date": "2013 год",
+  "plaintiff": "Организация",
+  "defendant": "ФИО",
+  "claim_amount": 11107.0,
+  "documents": [
+    {
+      "filename": "00_case_info.txt",
+      "title": "СВЕДЕНИЯ О ДЕЛЕ",
+      "document_type": "CASE_INFO",
+      "characters": 67
+    },
+    {
+      "filename": "01_claim.txt",
+      "title": "ИСКОВОЕ ЗАЯВЛЕНИЕ ИСТЦА",
+      "document_type": "CLAIM",
+      "characters": 1256
+    },
+    {
+      "filename": "02_response.txt",
+      "title": "ВОЗРАЖЕНИЯ ОТВЕТЧИКА",
+      "document_type": "RESPONSE",
+      "characters": 411
+    },
+    {
+      "filename": "05_protocol.txt",
+      "title": "ХОД СУДЕБНОГО ЗАСЕДАНИЯ",
+      "document_type": "PROTOCOL",
+      "characters": 3612
+    },
+    {
+      "filename": "06_court_findings.txt",
+      "title": "ОБСТОЯТЕЛЬСТВА, УСТАНОВЛЕННЫЕ СУДОМ",
+      "document_type": "FINDINGS",
+      "characters": 7841
+    }
+  ]
+}

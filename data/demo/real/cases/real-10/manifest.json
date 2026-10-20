@@ -1,0 +1,42 @@
+{
+  "warning": "ОБЕЗЛИЧЕННОЕ РЕАЛЬНОЕ СУДЕБНОЕ РЕШЕНИЕ из открытого корпуса решений (Hugging Face: TryDotAtwo/russian-legal-ner). Персональные данные удалены скриптом.",
+  "case_number": "REAL-10",
+  "court": "Мировой судья судебного участка № 3 Кулебакского района Нижегородской области ФИО",
+  "category": "споры о ЖКУ",
+  "hearing_date": "2012–2013",
+  "plaintiff": "Организация",
+  "defendant": "ФИО",
+  "claim_amount": 55021.0,
+  "documents": [
+    {
+      "filename": "00_case_info.txt",
+      "title": "СВЕДЕНИЯ О ДЕЛЕ",
+      "document_type": "CASE_INFO",
+      "characters": 410
+    },
+    {
+      "filename": "01_claim.txt",
+      "title": "ИСКОВОЕ ЗАЯВЛЕНИЕ ИСТЦА",
+      "document_type": "CLAIM",
+      "characters": 3553
+    },
+    {
+      "filename": "02_response.txt",
+      "title": "ВОЗРАЖЕНИЯ ОТВЕТЧИКА",
+      "document_type": "RESPONSE",
+      "characters": 69
+    },
+    {
+      "filename": "05_protocol.txt",
+      "title": "ХОД СУДЕБНОГО ЗАСЕДАНИЯ",
+      "document_type": "PROTOCOL",
+      "characters": 10167
+    },
+    {
+      "filename": "06_court_findings.txt",
+      "title": "ОБСТОЯТЕЛЬСТВА, УСТАНОВЛЕННЫЕ СУДОМ",
+      "document_type": "FINDINGS",
+      "characters": 2604
+    }
+  ]
+}
