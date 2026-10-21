@@ -102,6 +102,91 @@ class TestClaimWithoutAmountStaysVisible:
         assert amounts.get("убытки") is None
 
 
+class TestEqualSumsStayEqual:
+    """Одинаковые суммы у разных оснований — это два требования.
+
+    Регрессия после правила «сумма принадлежит одному основанию»:
+    «взыскать убытки 5 000 рублей и неустойку 5 000 рублей» — два
+    требования, и второе потеряло свою сумму.
+    """
+
+    def test_two_bases_with_same_sum_keep_it(self) -> None:
+        money, _others, _unrecognised = _extract(
+            "Взыскать с ответчика убытки 5000 рублей и неустойку 5000 рублей."
+        )
+        amounts = {claim.basis: claim.amount for claim in money}
+        assert amounts.get("убытки") == 5000
+        assert amounts.get("неустойка и санкции") == 5000
+        total = sum(claim.amount for claim in money if claim.amount)
+        assert total == 10000
+
+    def test_sums_differing_by_kopecks_are_not_merged(self) -> None:
+        money, _others, _unrecognised = _extract(
+            "Взыскать с ответчика неустойку 2202 рубля 90 копеек "
+            "и убытки 2202 рубля 00 копеек."
+        )
+        claims = {claim.basis: (claim.amount, claim.kopecks) for claim in money}
+        assert claims.get("неустойка и санкции") == (2202, 90)
+        assert claims.get("убытки") == (2202, 0)
+
+
+class TestCourtDeterminationIsNotAClaim:
+    """Сумма, названная судом, — не требование истца.
+
+    В real-05 моральный вред 1 000 руб. взят из мотивировки:
+    «суд считает необходимым взыскать …». Требование истца — 10 000
+    руб. (протокол). В проект должен попасть 10 000.
+    """
+
+    def test_court_wording_before_verb_is_skipped(self) -> None:
+        money, _others, _unrecognised = _extract(
+            "Взыскать с ответчика убытки 1000 рублей. Суд считает "
+            "необходимым взыскать компенсацию морального вреда 7777 рублей."
+        )
+        amounts = {claim.basis: claim.amount for claim in money}
+        assert amounts.get("убытки") == 1000
+        assert "компенсация морального вреда" not in amounts
+
+    def test_court_formula_neobhodimo_vzyskat(self) -> None:
+        money, _others, _unrecognised = _extract(
+            "С ответчика в пользу истца необходимо взыскать компенсацию "
+            "морального вреда в размере 2000 рублей, в остальной части "
+            "в удовлетворении иска отказать."
+        )
+        assert money == []
+
+
+class TestConflictNoteDetails:
+    def test_note_keeps_kopecks(self) -> None:
+        money, _others, unrecognised = _extract(
+            "Взыскать с ответчика неустойку 2202 рубля 90 копеек "
+            "и неустойку 10564 рубля 40 копеек."
+        )
+        notes = [item for item in unrecognised if "две суммы" in item]
+        assert notes, unrecognised
+        assert "2 202,90" in notes[0]
+        assert "10 564,40" in notes[0]
+
+    def test_note_not_duplicated(self) -> None:
+        pack = EvidencePack(case_number="T-REVIEW")
+        for order in (1, 2):
+            pack.items.append(
+                EvidenceItem(
+                    category="claims",
+                    text=(
+                        "Взыскать с ответчика убытки в размере 5000 рублей "
+                        "и убытки в размере 3000 рублей."
+                    ),
+                    source_document="01_claim.txt",
+                    source_type="CLAIM",
+                    order=order,
+                )
+            )
+        _money, _others, unrecognised = extract_requirements(pack)
+        notes = [item for item in unrecognised if "две суммы" in item]
+        assert len(notes) == 1, unrecognised
+
+
 class TestAmountSpelledOutInBrackets:
     def test_sum_with_words_in_brackets(self) -> None:
         # D5: «15 191 (Пятнадцать тысяч сто девяносто один) рубль

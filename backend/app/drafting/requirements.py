@@ -211,16 +211,27 @@ CLAIM_WINDOW = 700
 COUNTER_MARKER = re.compile(r"встречн\w*", re.I)
 
 
-def _claim_windows(streams: list[tuple[str, str]]) -> list[tuple[str, str]]:
-    """Нарезать сплошной текст на окна требований."""
-    windows: list[tuple[str, str]] = []
+def _claim_windows(
+    streams: list[tuple[str, str]],
+) -> list[tuple[str, str, str]]:
+    """Нарезать сплошной текст на окна требований.
+
+    Вместе с окном возвращается контекст перед ним (до 200 знаков):
+    без него не видно, чьё это требование. «Просит взыскать …» —
+    требование истца, а «Суд считает необходимым взыскать …» —
+    определение суда, и сумма оттуда не должна попасть в требования
+    истца (real-05: 1 000 руб. в мотивировке против 10 000 руб. в
+    протоколе).
+    """
+    windows: list[tuple[str, str, str]] = []
     for name, text in streams:
         starts = [m.start() for m in CLAIM_START.finditer(text)]
         for index, start in enumerate(starts):
             end = starts[index + 1] if index + 1 < len(starts) else len(text)
             chunk = text[start : min(end, start + CLAIM_WINDOW)]
             if chunk.strip():
-                windows.append((name, chunk))
+                context = text[max(0, start - 200) : start]
+                windows.append((name, chunk, context))
     return windows
 
 
@@ -363,7 +374,14 @@ def extract_requirements(
     #
     # Первая строка попадает в «claims», вторая — в «evidence»
     # (там есть слово «руб»), и без общего порядка сумма терялась.
-    for source, text in _claim_windows(_document_streams(pack)):
+    for source, text, context in _claim_windows(_document_streams(pack)):
+        if _is_court_determination(context):
+            # Это не требование истца, а определение суда («суд
+            # считает необходимым взыскать …»). Сумма оттуда в
+            # требования истца не попадает: иначе проект просит то,
+            # что присудил суд, и выглядит как требование.
+            continue
+
         requirement_text = text
         if _is_fee_requirement(text):
             # Пошлина взыскивается отдельным пунктом по ст. 98 ГПК РФ
@@ -406,27 +424,16 @@ def extract_requirements(
         # Платёж ОТ истца требованием не является: окно с таким
         # платежом в разборе по пунктам пропускается, как и целиком.
         #
-        # Сумма в окне принадлежит одному основанию: двум разным
-        # основаниям одна сумма не достаётся (дефект ревью D1 — иначе
-        # требование на 5 000 руб. считалось дважды).
-        used_amounts: dict[int, str] = {}
+        # Сумма в окне принадлежит одному основанию — но только для
+        # запасного пути «первая сумма окна». В разборе по пунктам у
+        # каждого пункта своя сумма, и одинаковые суммы у разных
+        # оснований — не двойной счёт, а два требования («убытки
+        # 5 000 рублей и неустойку 5 000 рублей»).
+        used_amounts: dict[tuple[int, int], str] = {}
         clause_text = "" if payer_is_plaintiff(requirement_text) else requirement_text
         clause_result = _clause_claims(clause_text)
         for clause_name, clause_whole, clause_kopecks in clause_result.claims:
-            owner = used_amounts.get(clause_whole)
-            if owner is not None and owner != clause_name:
-                # Сумма уже отдана другому основанию этого окна:
-                # требование остаётся видимым, но без своей суммы.
-                if clause_name not in money:
-                    money[clause_name] = MoneyClaim(
-                        amount=None,
-                        kopecks=0,
-                        basis=clause_name,
-                        source=source,
-                        outcome=Outcome.SATISFIED,
-                    )
-                continue
-            used_amounts[clause_whole] = clause_name
+            used_amounts[(clause_whole, clause_kopecks)] = clause_name
             existing_clause = money.get(clause_name)
             if existing_clause is None or existing_clause.amount is None:
                 money[clause_name] = MoneyClaim(
@@ -436,7 +443,10 @@ def extract_requirements(
                     source=source,
                     outcome=Outcome.SATISFIED,
                 )
-            elif existing_clause.amount != clause_whole and existing_clause.source == source:
+            elif (
+                existing_clause.amount != clause_whole
+                or existing_clause.kopecks != clause_kopecks
+            ) and existing_clause.source == source:
                 # Одно основание — две разные суммы (в real-04 протокол
                 # содержит и первоначальную неустойку, и уточнённую).
                 # Решение — за судьёй, но молчать нельзя.
@@ -449,7 +459,12 @@ def extract_requirements(
                 _add_note(
                     unrecognised,
                     _conflict_note(
-                        clause_name, existing_clause.amount, clause_whole, source
+                        clause_name,
+                        int(existing_clause.amount),
+                        existing_clause.kopecks,
+                        clause_whole,
+                        clause_kopecks,
+                        source,
                     ),
                 )
         for blank_name in clause_result.blanks:
@@ -464,9 +479,14 @@ def extract_requirements(
                     source=source,
                     outcome=Outcome.SATISFIED,
                 )
-        for conflict_name, first_sum, second_sum in clause_result.conflicts:
-            unrecognised.append(
-                _conflict_note(conflict_name, first_sum, second_sum, source)
+        for conflict_name, first_sum, first_kop, second_sum, second_kop in (
+            clause_result.conflicts
+        ):
+            _add_note(
+                unrecognised,
+                _conflict_note(
+                    conflict_name, first_sum, first_kop, second_sum, second_kop, source
+                ),
             )
 
         basis_match = claim_basis_match(requirement_text)
@@ -515,10 +535,11 @@ def extract_requirements(
                 found = after_basis
         whole, kopecks = found if found else (None, 0)
         if whole is not None:
-            owner = used_amounts.get(whole)
+            owner = used_amounts.get((whole, kopecks))
             if owner is not None and owner != basis:
-                # Сумма уже отдана другому основанию этого окна:
-                # требование остаётся видимым, но без своей суммы.
+                # Сумма уже отдана другому основанию этого окна: это
+                # запасной путь «первая сумма окна», и она чужая.
+                # Требование остаётся видимым, но без своей суммы.
                 if basis not in money:
                     money[basis] = MoneyClaim(
                         amount=None,
@@ -528,7 +549,7 @@ def extract_requirements(
                         outcome=Outcome.SATISFIED,
                     )
                 continue
-            used_amounts[whole] = basis
+            used_amounts[(whole, kopecks)] = basis
         existing = money.get(basis)
         if existing is None or (existing.amount is None and whole is not None):
             money[basis] = MoneyClaim(
@@ -541,13 +562,20 @@ def extract_requirements(
         elif (
             existing.amount is not None
             and whole is not None
-            and existing.amount != whole
+            and (existing.amount != whole or existing.kopecks != kopecks)
             and existing.source == source
         ):
             # Одно основание — две разные суммы (см. выше).
             _add_note(
                 unrecognised,
-                _conflict_note(basis, existing.amount, whole, source),
+                _conflict_note(
+                    basis,
+                    int(existing.amount),
+                    existing.kopecks,
+                    whole,
+                    kopecks,
+                    source,
+                ),
             )
 
     # Размер пошлины и иных расходов возвращаются отдельно, через
@@ -792,6 +820,34 @@ def _without_fee_fragments(text: str) -> str:
 # не разрывают предложение — иначе копейки отрывались бы от рублей.
 _SENTENCE_SPLIT = re.compile(r"(?<=[.;])\s+(?=[А-ЯЁ])")
 
+# Формулировки суда, по которым он САМ определяет, что взыскать.
+# Отличие от требования истца видно по словам перед глаголом:
+# «просил взыскать» — истец, «суд считает необходимым взыскать» —
+# суд. Слова «суд» самого по себе недостаточно: в протоколе истец
+# говорит «просил суд принять отказ …, взыскать с ответчика …».
+_COURT_DETERMINATION_RE = re.compile(
+    r"суд(?:ом)?\b[^.]{0,120}?(?:считает\s+необходимым|определил|постановил|"
+    r"присудил|решил|удовлетворил|отказал|признал)"
+    r"|считает\s+необходимым"
+    r"|необходимо\s+взыскать"
+    r"|необходимо\s*$"
+    r"|подлежит\s+взысканию"
+    r"|подлежат\s+взысканию",
+    re.I,
+)
+
+
+def _is_court_determination(context: str) -> bool:
+    """Определение суда, а не требование истца.
+
+    Смотрится только текст ПЕРЕД окном: «суд считает необходимым
+    взыскать …» — это мотивировка, «просил взыскать …» — требование.
+    Внутри окна смотреть нельзя: там может быть следующее требование
+    истца, а слова суда стоят уже после глагола.
+    """
+    return bool(_COURT_DETERMINATION_RE.search(context))
+
+
 # Признаки того, что пункт — это обстоятельства, а не требование.
 # В таких местах суд пересказывает установленное: «судом установлено,
 # что ущерб истцу составил 7777 рублей». Без отсева такая сумма
@@ -817,20 +873,32 @@ def _add_note(notes: list[str], text: str) -> None:
         notes.append(text)
 
 
-def _conflict_note(basis: str, first: float, second: float, source: str) -> str:
+def _conflict_note(
+    basis: str,
+    first: int,
+    first_kopecks: int,
+    second: int,
+    second_kopecks: int,
+    source: str,
+) -> str:
     """Заметка для судьи: по одному основанию в материалах две суммы.
 
     Молчать здесь нельзя: в проекте стоит одна сумма, а судья видит
     в материалах две. Какая из них просительная — вопрос суда, но
-    расхождение обязано быть видно.
+    расхождение обязано быть видно. Копейки в заметке тоже: в
+    проекте стоит 2 202,90, и «2 202» в заметке смотрелось бы как
+    опечатка.
     """
-    def number(value: float) -> str:
-        return f"{int(value):,}".replace(",", " ")
+    def number(value: int, kopecks: int) -> str:
+        whole = f"{value:,}".replace(",", " ")
+        if kopecks:
+            return f"{whole},{kopecks:02d}"
+        return whole
 
     return (
         f"по требованию «{basis}» в материалах две суммы: "
-        f"{number(first)} и {number(second)} руб. ({source}) — "
-        f"какая просительная, решает судья"
+        f"{number(first, first_kopecks)} и {number(second, second_kopecks)} "
+        f"руб. ({source}) — какая просительная, решает судья"
     )
 
 
@@ -897,12 +965,12 @@ class _ClauseResult(NamedTuple):
     blanks — основания, у которых сумма не нашлась (требование без
     суммы: оно должно остаться видимым, а не исчезнуть);
     conflicts — по одному основанию две разные суммы: (основание,
-    первая сумма, вторая сумма).
+    рубли и копейки первой, рубли и копейки второй).
     """
 
     claims: list[tuple[str, int, int]]
     blanks: list[str]
-    conflicts: list[tuple[str, int, int]]
+    conflicts: list[tuple[str, int, int, int, int]]
 
 
 def _clause_claims(text: str) -> _ClauseResult:
@@ -929,8 +997,8 @@ def _clause_claims(text: str) -> _ClauseResult:
     sentence = _SENTENCE_SPLIT.split(text)[0]
     claims: list[tuple[str, int, int]] = []
     blanks: list[str] = []
-    conflicts: list[tuple[str, int, int]] = []
-    seen: dict[str, int | None] = {}
+    conflicts: list[tuple[str, int, int, int, int]] = []
+    seen: dict[str, tuple[int, int] | None] = {}
     clauses = _clauses(sentence)
     index = 0
     while index < len(clauses):
@@ -971,13 +1039,14 @@ def _clause_claims(text: str) -> _ClauseResult:
                 continue
         index += consumed + 1
         amount = found[0]
+        kopecks = found[1]
         if basis in seen:
             previous = seen[basis]
-            if previous is not None and previous != amount:
-                conflicts.append((basis, previous, amount))
+            if previous is not None and previous != (amount, kopecks):
+                conflicts.append((basis, previous[0], previous[1], amount, kopecks))
             continue
-        seen[basis] = amount
-        claims.append((basis, amount, found[1]))
+        seen[basis] = (amount, kopecks)
+        claims.append((basis, amount, kopecks))
     return _ClauseResult(claims, blanks, conflicts)
 
 
