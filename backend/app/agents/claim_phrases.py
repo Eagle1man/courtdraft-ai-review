@@ -231,9 +231,23 @@ NON_MONEY_BASES = frozenset(
 )
 
 
+def claim_basis_match(text: str) -> tuple[str, re.Match[str]] | None:
+    """Основание требования вместе с его местом в тексте.
+
+    Место нужно, чтобы взять сумму, относящуюся именно к этому
+    основанию. В окне с несколькими пунктами («взыскать долг 5000 руб.
+    и неустойку 1000 руб.») первая сумма принадлежит соседнему
+    пункту, и без привязки к основанию неустойка получала чужую
+    сумму.
+    """
+    for pattern, basis in CLAIM_BASIS_PATTERNS:
+        match = pattern.search(text)
+        if match is not None:
+            return basis, match
+    return None
+
+
 def claim_basis(text: str) -> str | None:
     """Основание требования по тексту фразы, либо None."""
-    for pattern, basis in CLAIM_BASIS_PATTERNS:
-        if pattern.search(text):
-            return basis
-    return None
+    found = claim_basis_match(text)
+    return found[0] if found is not None else None

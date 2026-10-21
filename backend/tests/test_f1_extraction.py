@@ -196,6 +196,57 @@ class TestSumlessWindowDoesNotBlock:
         ]
 
 
+class TestSumBelongsToItsBasis:
+    """Сумма берётся та, что стоит после своего основания.
+
+    В окне с несколькими пунктами первая сумма — соседняя: «взыскать
+    долг 5000 руб. и неустойку 1000 руб.» отдавало неустойке 5000,
+    а в real-03 сумма неустойки 18 390 доставалась компенсации
+    морального вреда (в материалах моральный вред — 30 000).
+    """
+
+    def test_own_sum_taken_after_basis(self) -> None:
+        # Окно с двумя пунктами: неустойка получает свою сумму, а не
+        # первую в окне (5000 — это долг). Заметьте: «рублей» без
+        # точки — сокращение «руб.» разрывает связь «взыскать …
+        # основание» (ограничение _BETWEEN, см. документацию).
+        pack = _pack()
+        pack.items.append(
+            EvidenceItem(
+                category="claims",
+                text=(
+                    "Взыскать с ответчика задолженность 5000 рублей "
+                    "и неустойку 1000 рублей."
+                ),
+                source_document="01_claim.txt",
+                source_type="CLAIM",
+                order=1,
+            )
+        )
+        money, _others, _unrecognised = extract_requirements(pack)
+        assert [(claim.basis, claim.amount) for claim in money] == [
+            ("неустойка и санкции", 1000)
+        ]
+
+    def test_sum_before_basis_still_found(self) -> None:
+        # «взыскать 1000 рублей в возмещение убытков»: сумма стоит до
+        # основания — берётся первая в окне, иначе сумма терялась бы.
+        pack = _pack()
+        pack.items.append(
+            EvidenceItem(
+                category="claims",
+                text="Взыскать 1000 рублей в возмещение убытков.",
+                source_document="01_claim.txt",
+                source_type="CLAIM",
+                order=1,
+            )
+        )
+        money, _others, _unrecognised = extract_requirements(pack)
+        assert [(claim.basis, claim.amount) for claim in money] == [
+            ("убытки", 1000)
+        ]
+
+
 class TestRealCases:
     """Живые материалы: суммы, которые прежде терялись."""
 
@@ -214,6 +265,11 @@ class TestRealCases:
         expected = {
             "real-05": ("компенсация морального вреда", 1000),
             "real-08": ("убытки", 10400),
+            # real-03: моральному вреду достаётся своя сумма из иска
+            # (30 000), а не сумма соседнего пункта (неустойка 18 390).
+            # Неустойка в этом же окне не извлекается — ограничение
+            # «одно окно — одно основание», см. F2 в документации.
+            "real-03": ("компенсация морального вреда", 30000),
         }
         for slug, (basis, amount) in expected.items():
             case_dir = CASES / slug

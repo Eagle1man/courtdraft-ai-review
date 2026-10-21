@@ -34,6 +34,7 @@ from app.agents.claim_phrases import (
     CLAIM_VERB_RE,
     NON_MONEY_BASES,
     claim_basis,
+    claim_basis_match,
     looks_like_claim,
     payer_is_plaintiff,
 )
@@ -392,7 +393,8 @@ def extract_requirements(
         if _is_fee_requirement(requirement_text):
             continue
 
-        basis = claim_basis(requirement_text)
+        basis_match = claim_basis_match(requirement_text)
+        basis = basis_match[0] if basis_match is not None else None
         if basis is None:
             # Требование есть, а основание определить не удалось.
             # Оно показывается судье, а не выбрасывается: молча
@@ -422,7 +424,19 @@ def extract_requirements(
         # (без числа) стояло раньше окна с суммой 1000 руб. и
         # оставляло моральный вред без суммы, хотя в иске она есть
         # (real-05).
+        #
+        # Сумма берётся та, что стоит ПОСЛЕ основания, а не первая в
+        # окне. В окне с несколькими пунктами первая сумма — соседняя:
+        # «взыскать долг 5000 руб. и неустойку 1000 руб.» отдавало
+        # неустойке 5000, а в real-03 сумма неустойки 18 390 доставалась
+        # компенсации морального вреда. Если после основания суммы нет
+        # («взыскать 1000 руб. в возмещение убытков»), остаётся первая
+        # сумма окна.
         found = _find_amount_with_kopecks(requirement_text)
+        if basis_match is not None:
+            after_basis = _find_amount_with_kopecks(requirement_text[basis_match[1].end():])
+            if after_basis is not None:
+                found = after_basis
         whole, kopecks = found if found else (None, 0)
         existing = money.get(basis)
         if existing is None or (existing.amount is None and whole is not None):
