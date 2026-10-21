@@ -206,10 +206,10 @@ class TestSumBelongsToItsBasis:
     """
 
     def test_own_sum_taken_after_basis(self) -> None:
-        # Окно с двумя пунктами: неустойка получает свою сумму, а не
-        # первую в окне (5000 — это долг). Заметьте: «рублей» без
-        # точки — сокращение «руб.» разрывает связь «взыскать …
-        # основание» (ограничение _BETWEEN, см. документацию).
+        # Окно с двумя пунктами: у каждого своё основание и своя сумма.
+        # Заметьте: «рублей» без точки — сокращение «руб.» разрывает
+        # связь «взыскать … основание» (ограничение _BETWEEN, см.
+        # документацию), поэтому разбор идёт по пунктам перечисления.
         pack = _pack()
         pack.items.append(
             EvidenceItem(
@@ -225,7 +225,8 @@ class TestSumBelongsToItsBasis:
         )
         money, _others, _unrecognised = extract_requirements(pack)
         assert [(claim.basis, claim.amount) for claim in money] == [
-            ("неустойка и санкции", 1000)
+            ("задолженность по договору", 5000),
+            ("неустойка и санкции", 1000),
         ]
 
     def test_sum_before_basis_still_found(self) -> None:
@@ -281,3 +282,77 @@ class TestRealCases:
             money, _others, _unrecognised = extract_requirements(pack)
             found = {claim.basis: claim.amount for claim in money}
             assert found.get(basis) == amount, f"{slug}: {found}"
+
+
+class TestSeveralClaimsInOneWindow:
+    """В одном окне перечислены несколько требований.
+
+    Разбор окна целиком давал одно основание, и остальные суммы
+    терялись: в real-03 не была извлечена неустойка 18 390, в
+    real-04 — стоимость товара 10 490 и услуги представителя 7 000.
+    """
+
+    @staticmethod
+    def _money(case: str) -> dict[str, int | None]:
+        import importlib.util
+        import sys
+
+        spec = importlib.util.spec_from_file_location(
+            "clt_build_real_site", ROOT / "scripts" / "build_real_site.py"
+        )
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        sys.modules["clt_build_real_site"] = module
+        spec.loader.exec_module(module)
+
+        case_dir = CASES / case
+        if not (case_dir / "01_claim.txt").exists():
+            pytest.skip(f"локальные материалы {case} отсутствуют")
+        settings = module.make_settings(case_dir)
+        settings.ensure_dirs()
+        pack = module.build_pack(case_dir, settings)
+        money, _others, _unrecognised = extract_requirements(pack)
+        return {claim.basis: claim.amount for claim in money}
+
+    def test_real_03_penalty_and_moral_damage(self) -> None:
+        # В иске real-03 просят 18 390 неустойкой и 30 000 моральным
+        # вредом; обе суммы — из текста иска.
+        found = self._money("real-03")
+        assert found.get("неустойка и санкции") == 18390
+        assert found.get("компенсация морального вреда") == 30000
+
+    def test_real_04_enumerated_demands(self) -> None:
+        # Протокол real-04: стоимость товара 10 490, неустойка 2 202
+        # руб. 90 коп., моральный вред 10 000, услуги 7 000.
+        found = self._money("real-04")
+        assert found.get("задолженность по договору") == 10490
+        assert found.get("неустойка и санкции") == 2202
+        assert found.get("компенсация морального вреда") == 10000
+        assert found.get("расходы на представителя") == 7000
+
+    def test_real_06_penalty_moral_damage_and_losses(self) -> None:
+        # Протокол real-06: неустойка 6 890, моральный вред 7 000,
+        # убытки (кредит) 3 000.
+        found = self._money("real-06")
+        assert found.get("неустойка и санкции") == 6890
+        assert found.get("компенсация морального вреда") == 7000
+        assert found.get("убытки") == 3000
+
+    def test_amount_of_neighbour_basis_not_taken(self) -> None:
+        # «убытки, неустойку в сумме 2202 рублей»: у следующего
+        # пункта своё основание — склеивать нельзя, сумма досталась бы
+        # чужим требованиям.
+        pack = _pack()
+        pack.items.append(
+            EvidenceItem(
+                category="claims",
+                text="Взыскать убытки и неустойку в сумме 2202 рублей.",
+                source_document="01_claim.txt",
+                source_type="CLAIM",
+                order=1,
+            )
+        )
+        money, _others, _unrecognised = extract_requirements(pack)
+        amounts = {claim.basis: claim.amount for claim in money}
+        assert amounts.get("неустойка и санкции") == 2202
+        assert amounts.get("убытки") is None

@@ -31,6 +31,7 @@ from __future__ import annotations
 import re
 
 from app.agents.claim_phrases import (
+    CLAIM_BASIS_ANCHORS,
     CLAIM_VERB_RE,
     NON_MONEY_BASES,
     claim_basis,
@@ -393,6 +394,27 @@ def extract_requirements(
         if _is_fee_requirement(requirement_text):
             continue
 
+        # Пункты перечисления внутри окна: у каждого своё основание и
+        # своя сумма. Разбор окна целиком давал одно основание, и
+        # остальные суммы терялись (real-03: неустойка 18 390;
+        # real-04: стоимость товара 10 490 и услуги 7 000).
+        #
+        # Платёж ОТ истца требованием не является: окно с таким
+        # платежом в разборе по пунктам пропускается, как и целиком.
+        clause_text = "" if payer_is_plaintiff(requirement_text) else requirement_text
+        for clause_name, clause_whole, clause_kopecks in _clause_claims(clause_text):
+            existing_clause = money.get(clause_name)
+            if existing_clause is None or (
+                existing_clause.amount is None and clause_whole is not None
+            ):
+                money[clause_name] = MoneyClaim(
+                    amount=clause_whole,
+                    kopecks=clause_kopecks,
+                    basis=clause_name,
+                    source=source,
+                    outcome=Outcome.SATISFIED,
+                )
+
         basis_match = claim_basis_match(requirement_text)
         basis = basis_match[0] if basis_match is not None else None
         if basis is None:
@@ -679,6 +701,80 @@ def _without_fee_fragments(text: str) -> str:
             kept.append((carry if kept else "") + remainder)
     cleaned = re.sub(r"\s{2,}", " ", "".join(kept))
     return cleaned.strip(" \t,;")
+
+
+def _clauses(text: str) -> list[str]:
+    """Разбить окно требования на пункты перечисления.
+
+    Границы те же, что и при вырезании пошлинных кусков: конец
+    предложения (перед заглавной — «руб.» и «коп.» не разрываются),
+    запятая, союзы «и» и «а также».
+    """
+    parts = _FEE_CHUNK_SPLIT.split(text)
+    return [parts[index].strip() for index in range(0, len(parts), 2) if parts[index].strip()]
+
+
+def _clause_basis(clause: str) -> str | None:
+    """Основание пункта перечисления — самое конкретное из подошедших."""
+    for pattern, basis in CLAIM_BASIS_ANCHORS:
+        if pattern.search(clause):
+            return basis
+    return None
+
+
+def _clause_claims(text: str) -> list[tuple[str, int, int]]:
+    """Требования по пунктам перечисления: (основание, рубли, копейки).
+
+    Окно требования часто перечисляет несколько пунктов: «стоимость
+    товара в размере 10 490 рублей, неустойку за просрочку в размере
+    2 202 рубля 90 копеек, компенсацию морального вреда в размере
+    10 000 рублей». Разбор окна целиком даёт одно основание, и
+    остальные суммы терялись (real-03 — неустойка 18 390, real-04 —
+    стоимость товара 10 490 и услуги представителя 7 000).
+
+    Основание берётся самое конкретное (порядок якорей), сумма — первая
+    в пункте. Пункт с пошлиной пропускается: пошлина выносится
+    отдельно по ст. 98 ГПК РФ.
+    """
+    claims: list[tuple[str, int, int]] = []
+    seen: set[str] = set()
+    clauses = _clauses(text)
+    index = 0
+    while index < len(clauses):
+        clause = clauses[index]
+        if _is_fee_requirement(clause):
+            index += 1
+            continue
+        basis = _clause_basis(clause)
+        if basis is None or basis in seen:
+            index += 1
+            continue
+        found = _find_amount_with_kopecks(clause)
+        if found is None:
+            # Основание отдельно от суммы: «убытки, связанные с
+            # получением кредита в сумме 3000 рублей». Пункт
+            # соединяется со следующим, только если у следующего нет
+            # своего основания — иначе сумма досталась бы чужому
+            # пункту («убытки, неустойку в сумме 2202 рублей»).
+            for shift in (1, 2):
+                if index + shift >= len(clauses):
+                    break
+                following = clauses[index + shift]
+                if _is_fee_requirement(following):
+                    break
+                if _clause_basis(following) is not None:
+                    break
+                found = _find_amount_with_kopecks(following)
+                if found is not None:
+                    index += shift
+                    break
+            if found is None:
+                index += 1
+                continue
+        seen.add(basis)
+        claims.append((basis, found[0], found[1]))
+        index += 1
+    return claims
 
 
 def extract_parties(pack: EvidencePack) -> Parties:
