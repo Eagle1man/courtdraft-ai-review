@@ -29,6 +29,7 @@
 from __future__ import annotations
 
 import re
+from typing import NamedTuple
 
 from app.agents.claim_phrases import (
     CLAIM_BASIS_ANCHORS,
@@ -105,7 +106,7 @@ def _find_amount_with_kopecks(text: str) -> tuple[int, int] | None:
     взыскания, который предъявляют к исполнению.
     """
     with_kop = re.search(
-        r"([\d][\d\s\u00a0\u2009\u202f]{2,})\s*руб(?:лей|ля|ль|\.)?\s*"
+        r"([\d][\d\s\u00a0\u2009\u202f]{2,})\s*(?:\((?:[^()\d]{3,120})\)\s*)?руб(?:лей|ля|ль|\.)?\s*"
         r"(\d{1,2})\s*коп",
         text,
         re.I,
@@ -135,7 +136,10 @@ def _find_amount(text: str) -> int | None:
     пробел, заполняемый судьёй, чем неверная цифра в проекте решения.
     """
     with_currency = re.search(
-        r"([\d][\d\s]{2,})\s*(?:руб(?:\.|лей|ля|\b)|₽|тыс\.?\s*руб)", text, re.I
+        r"([\d][\d\s]{2,})\s*(?:\((?:[^()\d]{3,120})\)\s*)?"
+        r"(?:руб(?:\.|лей|ля|\b)|₽|тыс\.?\s*руб)",
+        text,
+        re.I,
     )
     if not with_currency:
         return None
@@ -401,12 +405,30 @@ def extract_requirements(
         #
         # Платёж ОТ истца требованием не является: окно с таким
         # платежом в разборе по пунктам пропускается, как и целиком.
+        #
+        # Сумма в окне принадлежит одному основанию: двум разным
+        # основаниям одна сумма не достаётся (дефект ревью D1 — иначе
+        # требование на 5 000 руб. считалось дважды).
+        used_amounts: dict[int, str] = {}
         clause_text = "" if payer_is_plaintiff(requirement_text) else requirement_text
-        for clause_name, clause_whole, clause_kopecks in _clause_claims(clause_text):
+        clause_result = _clause_claims(clause_text)
+        for clause_name, clause_whole, clause_kopecks in clause_result.claims:
+            owner = used_amounts.get(clause_whole)
+            if owner is not None and owner != clause_name:
+                # Сумма уже отдана другому основанию этого окна:
+                # требование остаётся видимым, но без своей суммы.
+                if clause_name not in money:
+                    money[clause_name] = MoneyClaim(
+                        amount=None,
+                        kopecks=0,
+                        basis=clause_name,
+                        source=source,
+                        outcome=Outcome.SATISFIED,
+                    )
+                continue
+            used_amounts[clause_whole] = clause_name
             existing_clause = money.get(clause_name)
-            if existing_clause is None or (
-                existing_clause.amount is None and clause_whole is not None
-            ):
+            if existing_clause is None or existing_clause.amount is None:
                 money[clause_name] = MoneyClaim(
                     amount=clause_whole,
                     kopecks=clause_kopecks,
@@ -414,6 +436,38 @@ def extract_requirements(
                     source=source,
                     outcome=Outcome.SATISFIED,
                 )
+            elif existing_clause.amount != clause_whole and existing_clause.source == source:
+                # Одно основание — две разные суммы (в real-04 протокол
+                # содержит и первоначальную неустойку, и уточнённую).
+                # Решение — за судьёй, но молчать нельзя.
+                #
+                # Сравниваются суммы из одного документа: расхождение
+                # между иском и решением суда — это не конфликт
+                # требований, а вывод исхода (суд удовлетворил частично
+                # или отказал), и он остаётся за судьёй и без этой
+                # заметки.
+                _add_note(
+                    unrecognised,
+                    _conflict_note(
+                        clause_name, existing_clause.amount, clause_whole, source
+                    ),
+                )
+        for blank_name in clause_result.blanks:
+            # Требование без своей суммы: остаётся видимым (в
+            # резолюции по нему — пробел «не указана сумма»), а не
+            # исчезает молча.
+            if blank_name not in money:
+                money[blank_name] = MoneyClaim(
+                    amount=None,
+                    kopecks=0,
+                    basis=blank_name,
+                    source=source,
+                    outcome=Outcome.SATISFIED,
+                )
+        for conflict_name, first_sum, second_sum in clause_result.conflicts:
+            unrecognised.append(
+                _conflict_note(conflict_name, first_sum, second_sum, source)
+            )
 
         basis_match = claim_basis_match(requirement_text)
         basis = basis_match[0] if basis_match is not None else None
@@ -460,6 +514,21 @@ def extract_requirements(
             if after_basis is not None:
                 found = after_basis
         whole, kopecks = found if found else (None, 0)
+        if whole is not None:
+            owner = used_amounts.get(whole)
+            if owner is not None and owner != basis:
+                # Сумма уже отдана другому основанию этого окна:
+                # требование остаётся видимым, но без своей суммы.
+                if basis not in money:
+                    money[basis] = MoneyClaim(
+                        amount=None,
+                        kopecks=0,
+                        basis=basis,
+                        source=source,
+                        outcome=Outcome.SATISFIED,
+                    )
+                continue
+            used_amounts[whole] = basis
         existing = money.get(basis)
         if existing is None or (existing.amount is None and whole is not None):
             money[basis] = MoneyClaim(
@@ -468,6 +537,17 @@ def extract_requirements(
                 basis=basis,
                 source=source,
                 outcome=Outcome.SATISFIED,
+            )
+        elif (
+            existing.amount is not None
+            and whole is not None
+            and existing.amount != whole
+            and existing.source == source
+        ):
+            # Одно основание — две разные суммы (см. выше).
+            _add_note(
+                unrecognised,
+                _conflict_note(basis, existing.amount, whole, source),
             )
 
     # Размер пошлины и иных расходов возвращаются отдельно, через
@@ -615,7 +695,7 @@ _FEE_MARKERS: tuple[re.Pattern[str], ...] = (
 # вроде «416 руб. 00 коп.» иначе расщепляются, и копейки от
 # пошлины приклеиваются к соседней сумме.
 _FEE_CHUNK_SPLIT = re.compile(
-    r"((?<=[.;])\s+(?=[А-ЯЁ])|,\s*|\s+и\s+|\s+а\s+также\s+)",
+    r"((?<=[.;])\s+(?=[А-ЯЁ])|;\s*|,\s*|\s+и\s+|\s+а\s+также\s+)",
     re.I,
 )
 
@@ -688,6 +768,11 @@ def _without_fee_fragments(text: str) -> str:
         if marker is None:
             kept.append((carry if kept else "") + segment)
             continue
+        # Вырезанное место отмечается точкой с запятой: без неё куски
+        # срастаются, и якорь из соседнего пункта («штраф») приклеивается
+        # к чужой сумме (real-06: 9 000 руб. за услуги представителя
+        # приклеились к неустойке).
+        kept.append("; ")
         remainder = segment[: marker.start()].rstrip(" \t,;")
         if remainder and neighbour_digits.search(remainder):
             # Признак в середине куска с суммой до него: «взыскать
@@ -703,6 +788,52 @@ def _without_fee_fragments(text: str) -> str:
     return cleaned.strip(" \t,;")
 
 
+# Граница предложения: точка и дальше заглавная. «руб.» и «коп.» так
+# не разрывают предложение — иначе копейки отрывались бы от рублей.
+_SENTENCE_SPLIT = re.compile(r"(?<=[.;])\s+(?=[А-ЯЁ])")
+
+# Признаки того, что пункт — это обстоятельства, а не требование.
+# В таких местах суд пересказывает установленное: «судом установлено,
+# что ущерб истцу составил 7777 рублей». Без отсева такая сумма
+# попадала бы в проект как требование (дефект ревью D2).
+_NARRATION_MARKERS = re.compile(
+    r"суд(?:ом)?\s+(?:установил|установлено|считает|пришел\s+к\s+выводу)"
+    r"|установлено,?\s+что"
+    r"|по\s+(?:мнению|заключению|показаниям)"
+    r"|истец\s+пояснил"
+    r"|принимая\s+во\s+внимание"
+    r"|считается,?\s+что",
+    re.I,
+)
+
+
+def _add_note(notes: list[str], text: str) -> None:
+    """Добавить заметку, не повторяя уже добавленную.
+
+    Один и тот же конфликт встречается в нескольких окнах (протокол
+    повторяет требования), и судье достаточно увидеть его один раз.
+    """
+    if text not in notes:
+        notes.append(text)
+
+
+def _conflict_note(basis: str, first: float, second: float, source: str) -> str:
+    """Заметка для судьи: по одному основанию в материалах две суммы.
+
+    Молчать здесь нельзя: в проекте стоит одна сумма, а судья видит
+    в материалах две. Какая из них просительная — вопрос суда, но
+    расхождение обязано быть видно.
+    """
+    def number(value: float) -> str:
+        return f"{int(value):,}".replace(",", " ")
+
+    return (
+        f"по требованию «{basis}» в материалах две суммы: "
+        f"{number(first)} и {number(second)} руб. ({source}) — "
+        f"какая просительная, решает судья"
+    )
+
+
 def _clauses(text: str) -> list[str]:
     """Разбить окно требования на пункты перечисления.
 
@@ -714,16 +845,68 @@ def _clauses(text: str) -> list[str]:
     return [parts[index].strip() for index in range(0, len(parts), 2) if parts[index].strip()]
 
 
+def _first_amount_span(text: str) -> tuple[int, int] | None:
+    """Границы первого денежного размера в тексте."""
+    match = re.search(
+        r"([\d][\d\s]{2,})\s*(?:\((?:[^()\d]{3,120})\)\s*)?"
+        r"(?:руб(?:\.|лей|ля|\b)|₽|тыс\.?\s*руб)",
+        text,
+        re.I,
+    )
+    if match is None:
+        return None
+    return match.start(), match.end()
+
+
 def _clause_basis(clause: str) -> str | None:
-    """Основание пункта перечисления — самое конкретное из подошедших."""
-    for pattern, basis in CLAIM_BASIS_ANCHORS:
-        if pattern.search(clause):
-            return basis
-    return None
+    """Основание пункта перечисления.
+
+    Берётся якорь, ближайший к сумме и стоящий перед ней: в пункте
+    «расходы на юридические услуги и представительство … в сумме
+    9 000 рублей» сумма относится к услугам, а не к тому, что стоит
+    в пункте дальше. Если якоря перед суммой нет, берётся ближайший
+    после: в записи «в размере 18 390 рублей в качестве неустойки»
+    основание стоит именно так. При равной позиции выигрывает более
+    длинный (то есть более конкретный) якорь: «компенсация морального
+    вреда» вместо общего «компенсация».
+    """
+    span = _first_amount_span(clause)
+    limit = span[0] if span is not None else len(clause)
+    before: tuple[int, int, int] | None = None
+    after: tuple[int, int, int] | None = None
+    for order, (pattern, _basis) in enumerate(CLAIM_BASIS_ANCHORS):
+        for match in pattern.finditer(clause):
+            candidate = (match.start(), match.end() - match.start(), order)
+            if match.start() <= limit:
+                if before is None or candidate[0] > before[0] or (
+                    candidate[0] == before[0] and candidate[1] > before[1]
+                ):
+                    before = candidate
+            elif after is None or candidate[0] < after[0]:
+                after = candidate
+    best = before if before is not None else after
+    if best is None:
+        return None
+    return CLAIM_BASIS_ANCHORS[best[2]][1]
 
 
-def _clause_claims(text: str) -> list[tuple[str, int, int]]:
-    """Требования по пунктам перечисления: (основание, рубли, копейки).
+class _ClauseResult(NamedTuple):
+    """Результат разбора окна по пунктам перечисления.
+
+    claims — требования с суммой: (основание, рубли, копейки);
+    blanks — основания, у которых сумма не нашлась (требование без
+    суммы: оно должно остаться видимым, а не исчезнуть);
+    conflicts — по одному основанию две разные суммы: (основание,
+    первая сумма, вторая сумма).
+    """
+
+    claims: list[tuple[str, int, int]]
+    blanks: list[str]
+    conflicts: list[tuple[str, int, int]]
+
+
+def _clause_claims(text: str) -> _ClauseResult:
+    """Требования по пунктам перечисления.
 
     Окно требования часто перечисляет несколько пунктов: «стоимость
     товара в размере 10 490 рублей, неустойку за просрочку в размере
@@ -732,49 +915,70 @@ def _clause_claims(text: str) -> list[tuple[str, int, int]]:
     остальные суммы терялись (real-03 — неустойка 18 390, real-04 —
     стоимость товара 10 490 и услуги представителя 7 000).
 
+    Разбирается только ПЕРВОЕ предложение окна: дальше идёт
+    мотивировка суда, и сумма оттуда попадала бы в проект как
+    требование («судом установлено, что ущерб составил 7777 рублей»).
+    Пункты с признаками обстоятельств пропускаются.
+
     Основание берётся самое конкретное (порядок якорей), сумма — первая
     в пункте. Пункт с пошлиной пропускается: пошлина выносится
     отдельно по ст. 98 ГПК РФ.
     """
+    if not text:
+        return _ClauseResult([], [], [])
+    sentence = _SENTENCE_SPLIT.split(text)[0]
     claims: list[tuple[str, int, int]] = []
-    seen: set[str] = set()
-    clauses = _clauses(text)
+    blanks: list[str] = []
+    conflicts: list[tuple[str, int, int]] = []
+    seen: dict[str, int | None] = {}
+    clauses = _clauses(sentence)
     index = 0
     while index < len(clauses):
         clause = clauses[index]
-        if _is_fee_requirement(clause):
+        if _is_fee_requirement(clause) or _NARRATION_MARKERS.search(clause):
             index += 1
             continue
         basis = _clause_basis(clause)
-        if basis is None or basis in seen:
+        if basis is None:
             index += 1
             continue
         found = _find_amount_with_kopecks(clause)
+        consumed = 0
         if found is None:
             # Основание отдельно от суммы: «убытки, связанные с
             # получением кредита в сумме 3000 рублей». Пункт
-            # соединяется со следующим, только если у следующего нет
-            # своего основания — иначе сумма досталась бы чужому
-            # пункту («убытки, неустойку в сумме 2202 рублей»).
-            for shift in (1, 2):
-                if index + shift >= len(clauses):
-                    break
-                following = clauses[index + shift]
-                if _is_fee_requirement(following):
-                    break
-                if _clause_basis(following) is not None:
-                    break
-                found = _find_amount_with_kopecks(following)
-                if found is not None:
-                    index += shift
-                    break
+            # соединяется только со следующим и только если у того
+            # нет своего основания — иначе сумма досталась бы чужому
+            # пункту («убытки, неустойку в сумме 2202 рублей»), а
+            # через два пункта сумма приклеивалась совсем издалека
+            # («штраф в пользу потребителя, расходы на юридические
+            # услуги, … в сумме 9000 рублей»).
+            if index + 1 < len(clauses):
+                following = clauses[index + 1]
+                if (
+                    not _is_fee_requirement(following)
+                    and not _NARRATION_MARKERS.search(following)
+                    and _clause_basis(following) is None
+                ):
+                    found = _find_amount_with_kopecks(following)
+                    if found is not None:
+                        consumed = 1
             if found is None:
+                if basis not in seen:
+                    seen[basis] = None
+                    blanks.append(basis)
                 index += 1
                 continue
-        seen.add(basis)
-        claims.append((basis, found[0], found[1]))
-        index += 1
-    return claims
+        index += consumed + 1
+        amount = found[0]
+        if basis in seen:
+            previous = seen[basis]
+            if previous is not None and previous != amount:
+                conflicts.append((basis, previous, amount))
+            continue
+        seen[basis] = amount
+        claims.append((basis, amount, found[1]))
+    return _ClauseResult(claims, blanks, conflicts)
 
 
 def extract_parties(pack: EvidencePack) -> Parties:
