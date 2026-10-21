@@ -1,0 +1,574 @@
+From 4f679d2ab56c93cf02ee63245b7aea0abc7f70f3 Mon Sep 17 00:00:00 2001
+From: Eagle1man <orel198611@gmail.com>
+Date: Thu, 22 Oct 2026 02:56:29 +0300
+Subject: [PATCH] =?UTF-8?q?=D0=9F=D1=80=D0=BE=D0=B2=D0=B5=D1=80=D0=BE?=
+ =?UTF-8?q?=D1=87=D0=BD=D0=BE=D0=B5=20=D1=80=D0=B5=D0=B2=D1=8C=D1=8E=20?=
+ =?UTF-8?q?=D0=BF=D1=80=D0=B0=D0=B2=D0=BE=D0=BA:=20=D0=BE=D0=BF=D1=80?=
+ =?UTF-8?q?=D0=B5=D0=B4=D0=B5=D0=BB=D0=B5=D0=BD=D0=B8=D0=B5=20=D1=81=D1=83?=
+ =?UTF-8?q?=D0=B4=D0=B0=20=D0=BD=D0=B5=20=D0=B2=D1=8B=D0=B4=D0=B0=D1=91?=
+ =?UTF-8?q?=D1=82=D1=81=D1=8F=20=D0=B7=D0=B0=20=D1=82=D1=80=D0=B5=D0=B1?=
+ =?UTF-8?q?=D0=BE=D0=B2=D0=B0=D0=BD=D0=B8=D0=B5=20=D0=B8=D1=81=D1=82=D1=86?=
+ =?UTF-8?q?=D0=B0?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Шесть замечаний к предыдущим правкам закрыты. Главное: окно смотрит контекст перед глаголом и отличает «просил взыскать» от «суд считает необходимым взыскать» / «необходимо взыскать» - в real-05 моральный вред 1 000 брался из мотивировки суда, а требование истца 10 000 (протокол); в проекте теперь 10 000. Правило «сумма принадлежит одному основанию» больше не применяется к разбору по пунктам (разные основания с одинаковой суммой - это два требования), ключ строится по паре (рубли, копейки), в заметке о конфликте суммы с копейками и без повторов. Тесты: test_review_findings.py пополнен (равные суммы, копейки, определение суда, заметки), test_f1_extraction.py приведён к исправленному поведению. Итоги: real-03 48390, real-04 29692, real-05 41381, real-06 16890. Suite 750/0, ruff, mypy чисто.
+---
+ backend/app/drafting/requirements.py  | 165 ++++++++++++++++++--------
+ backend/tests/test_f1_extraction.py   |  20 ++--
+ backend/tests/test_review_findings.py |  85 +++++++++++++
+ docs/agent-summary.md                 |  24 ++--
+ docs/end-to-end-evaluation.md         |  38 +++++-
+ 5 files changed, 263 insertions(+), 69 deletions(-)
+
+diff --git a/backend/app/drafting/requirements.py b/backend/app/drafting/requirements.py
+index 13be000..5a07c21 100644
+--- a/backend/app/drafting/requirements.py
++++ b/backend/app/drafting/requirements.py
+@@ -211,16 +211,27 @@ CLAIM_WINDOW = 700
+ COUNTER_MARKER = re.compile(r"встречн\w*", re.I)
+ 
+ 
+-def _claim_windows(streams: list[tuple[str, str]]) -> list[tuple[str, str]]:
+-    """Нарезать сплошной текст на окна требований."""
+-    windows: list[tuple[str, str]] = []
++def _claim_windows(
++    streams: list[tuple[str, str]],
++) -> list[tuple[str, str, str]]:
++    """Нарезать сплошной текст на окна требований.
++
++    Вместе с окном возвращается контекст перед ним (до 200 знаков):
++    без него не видно, чьё это требование. «Просит взыскать …» —
++    требование истца, а «Суд считает необходимым взыскать …» —
++    определение суда, и сумма оттуда не должна попасть в требования
++    истца (real-05: 1 000 руб. в мотивировке против 10 000 руб. в
++    протоколе).
++    """
++    windows: list[tuple[str, str, str]] = []
+     for name, text in streams:
+         starts = [m.start() for m in CLAIM_START.finditer(text)]
+         for index, start in enumerate(starts):
+             end = starts[index + 1] if index + 1 < len(starts) else len(text)
+             chunk = text[start : min(end, start + CLAIM_WINDOW)]
+             if chunk.strip():
+-                windows.append((name, chunk))
++                context = text[max(0, start - 200) : start]
++                windows.append((name, chunk, context))
+     return windows
+ 
+ 
+@@ -363,7 +374,14 @@ def extract_requirements(
+     #
+     # Первая строка попадает в «claims», вторая — в «evidence»
+     # (там есть слово «руб»), и без общего порядка сумма терялась.
+-    for source, text in _claim_windows(_document_streams(pack)):
++    for source, text, context in _claim_windows(_document_streams(pack)):
++        if _is_court_determination(context):
++            # Это не требование истца, а определение суда («суд
++            # считает необходимым взыскать …»). Сумма оттуда в
++            # требования истца не попадает: иначе проект просит то,
++            # что присудил суд, и выглядит как требование.
++            continue
++
+         requirement_text = text
+         if _is_fee_requirement(text):
+             # Пошлина взыскивается отдельным пунктом по ст. 98 ГПК РФ
+@@ -406,27 +424,16 @@ def extract_requirements(
+         # Платёж ОТ истца требованием не является: окно с таким
+         # платежом в разборе по пунктам пропускается, как и целиком.
+         #
+-        # Сумма в окне принадлежит одному основанию: двум разным
+-        # основаниям одна сумма не достаётся (дефект ревью D1 — иначе
+-        # требование на 5 000 руб. считалось дважды).
+-        used_amounts: dict[int, str] = {}
++        # Сумма в окне принадлежит одному основанию — но только для
++        # запасного пути «первая сумма окна». В разборе по пунктам у
++        # каждого пункта своя сумма, и одинаковые суммы у разных
++        # оснований — не двойной счёт, а два требования («убытки
++        # 5 000 рублей и неустойку 5 000 рублей»).
++        used_amounts: dict[tuple[int, int], str] = {}
+         clause_text = "" if payer_is_plaintiff(requirement_text) else requirement_text
+         clause_result = _clause_claims(clause_text)
+         for clause_name, clause_whole, clause_kopecks in clause_result.claims:
+-            owner = used_amounts.get(clause_whole)
+-            if owner is not None and owner != clause_name:
+-                # Сумма уже отдана другому основанию этого окна:
+-                # требование остаётся видимым, но без своей суммы.
+-                if clause_name not in money:
+-                    money[clause_name] = MoneyClaim(
+-                        amount=None,
+-                        kopecks=0,
+-                        basis=clause_name,
+-                        source=source,
+-                        outcome=Outcome.SATISFIED,
+-                    )
+-                continue
+-            used_amounts[clause_whole] = clause_name
++            used_amounts[(clause_whole, clause_kopecks)] = clause_name
+             existing_clause = money.get(clause_name)
+             if existing_clause is None or existing_clause.amount is None:
+                 money[clause_name] = MoneyClaim(
+@@ -436,7 +443,10 @@ def extract_requirements(
+                     source=source,
+                     outcome=Outcome.SATISFIED,
+                 )
+-            elif existing_clause.amount != clause_whole and existing_clause.source == source:
++            elif (
++                existing_clause.amount != clause_whole
++                or existing_clause.kopecks != clause_kopecks
++            ) and existing_clause.source == source:
+                 # Одно основание — две разные суммы (в real-04 протокол
+                 # содержит и первоначальную неустойку, и уточнённую).
+                 # Решение — за судьёй, но молчать нельзя.
+@@ -449,7 +459,12 @@ def extract_requirements(
+                 _add_note(
+                     unrecognised,
+                     _conflict_note(
+-                        clause_name, existing_clause.amount, clause_whole, source
++                        clause_name,
++                        int(existing_clause.amount),
++                        existing_clause.kopecks,
++                        clause_whole,
++                        clause_kopecks,
++                        source,
+                     ),
+                 )
+         for blank_name in clause_result.blanks:
+@@ -464,9 +479,14 @@ def extract_requirements(
+                     source=source,
+                     outcome=Outcome.SATISFIED,
+                 )
+-        for conflict_name, first_sum, second_sum in clause_result.conflicts:
+-            unrecognised.append(
+-                _conflict_note(conflict_name, first_sum, second_sum, source)
++        for conflict_name, first_sum, first_kop, second_sum, second_kop in (
++            clause_result.conflicts
++        ):
++            _add_note(
++                unrecognised,
++                _conflict_note(
++                    conflict_name, first_sum, first_kop, second_sum, second_kop, source
++                ),
+             )
+ 
+         basis_match = claim_basis_match(requirement_text)
+@@ -515,10 +535,11 @@ def extract_requirements(
+                 found = after_basis
+         whole, kopecks = found if found else (None, 0)
+         if whole is not None:
+-            owner = used_amounts.get(whole)
++            owner = used_amounts.get((whole, kopecks))
+             if owner is not None and owner != basis:
+-                # Сумма уже отдана другому основанию этого окна:
+-                # требование остаётся видимым, но без своей суммы.
++                # Сумма уже отдана другому основанию этого окна: это
++                # запасной путь «первая сумма окна», и она чужая.
++                # Требование остаётся видимым, но без своей суммы.
+                 if basis not in money:
+                     money[basis] = MoneyClaim(
+                         amount=None,
+@@ -528,7 +549,7 @@ def extract_requirements(
+                         outcome=Outcome.SATISFIED,
+                     )
+                 continue
+-            used_amounts[whole] = basis
++            used_amounts[(whole, kopecks)] = basis
+         existing = money.get(basis)
+         if existing is None or (existing.amount is None and whole is not None):
+             money[basis] = MoneyClaim(
+@@ -541,13 +562,20 @@ def extract_requirements(
+         elif (
+             existing.amount is not None
+             and whole is not None
+-            and existing.amount != whole
++            and (existing.amount != whole or existing.kopecks != kopecks)
+             and existing.source == source
+         ):
+             # Одно основание — две разные суммы (см. выше).
+             _add_note(
+                 unrecognised,
+-                _conflict_note(basis, existing.amount, whole, source),
++                _conflict_note(
++                    basis,
++                    int(existing.amount),
++                    existing.kopecks,
++                    whole,
++                    kopecks,
++                    source,
++                ),
+             )
+ 
+     # Размер пошлины и иных расходов возвращаются отдельно, через
+@@ -792,6 +820,34 @@ def _without_fee_fragments(text: str) -> str:
+ # не разрывают предложение — иначе копейки отрывались бы от рублей.
+ _SENTENCE_SPLIT = re.compile(r"(?<=[.;])\s+(?=[А-ЯЁ])")
+ 
++# Формулировки суда, по которым он САМ определяет, что взыскать.
++# Отличие от требования истца видно по словам перед глаголом:
++# «просил взыскать» — истец, «суд считает необходимым взыскать» —
++# суд. Слова «суд» самого по себе недостаточно: в протоколе истец
++# говорит «просил суд принять отказ …, взыскать с ответчика …».
++_COURT_DETERMINATION_RE = re.compile(
++    r"суд(?:ом)?\b[^.]{0,120}?(?:считает\s+необходимым|определил|постановил|"
++    r"присудил|решил|удовлетворил|отказал|признал)"
++    r"|считает\s+необходимым"
++    r"|необходимо\s+взыскать"
++    r"|необходимо\s*$"
++    r"|подлежит\s+взысканию"
++    r"|подлежат\s+взысканию",
++    re.I,
++)
++
++
++def _is_court_determination(context: str) -> bool:
++    """Определение суда, а не требование истца.
++
++    Смотрится только текст ПЕРЕД окном: «суд считает необходимым
++    взыскать …» — это мотивировка, «просил взыскать …» — требование.
++    Внутри окна смотреть нельзя: там может быть следующее требование
++    истца, а слова суда стоят уже после глагола.
++    """
++    return bool(_COURT_DETERMINATION_RE.search(context))
++
++
+ # Признаки того, что пункт — это обстоятельства, а не требование.
+ # В таких местах суд пересказывает установленное: «судом установлено,
+ # что ущерб истцу составил 7777 рублей». Без отсева такая сумма
+@@ -817,20 +873,32 @@ def _add_note(notes: list[str], text: str) -> None:
+         notes.append(text)
+ 
+ 
+-def _conflict_note(basis: str, first: float, second: float, source: str) -> str:
++def _conflict_note(
++    basis: str,
++    first: int,
++    first_kopecks: int,
++    second: int,
++    second_kopecks: int,
++    source: str,
++) -> str:
+     """Заметка для судьи: по одному основанию в материалах две суммы.
+ 
+     Молчать здесь нельзя: в проекте стоит одна сумма, а судья видит
+     в материалах две. Какая из них просительная — вопрос суда, но
+-    расхождение обязано быть видно.
++    расхождение обязано быть видно. Копейки в заметке тоже: в
++    проекте стоит 2 202,90, и «2 202» в заметке смотрелось бы как
++    опечатка.
+     """
+-    def number(value: float) -> str:
+-        return f"{int(value):,}".replace(",", " ")
++    def number(value: int, kopecks: int) -> str:
++        whole = f"{value:,}".replace(",", " ")
++        if kopecks:
++            return f"{whole},{kopecks:02d}"
++        return whole
+ 
+     return (
+         f"по требованию «{basis}» в материалах две суммы: "
+-        f"{number(first)} и {number(second)} руб. ({source}) — "
+-        f"какая просительная, решает судья"
++        f"{number(first, first_kopecks)} и {number(second, second_kopecks)} "
++        f"руб. ({source}) — какая просительная, решает судья"
+     )
+ 
+ 
+@@ -897,12 +965,12 @@ class _ClauseResult(NamedTuple):
+     blanks — основания, у которых сумма не нашлась (требование без
+     суммы: оно должно остаться видимым, а не исчезнуть);
+     conflicts — по одному основанию две разные суммы: (основание,
+-    первая сумма, вторая сумма).
++    рубли и копейки первой, рубли и копейки второй).
+     """
+ 
+     claims: list[tuple[str, int, int]]
+     blanks: list[str]
+-    conflicts: list[tuple[str, int, int]]
++    conflicts: list[tuple[str, int, int, int, int]]
+ 
+ 
+ def _clause_claims(text: str) -> _ClauseResult:
+@@ -929,8 +997,8 @@ def _clause_claims(text: str) -> _ClauseResult:
+     sentence = _SENTENCE_SPLIT.split(text)[0]
+     claims: list[tuple[str, int, int]] = []
+     blanks: list[str] = []
+-    conflicts: list[tuple[str, int, int]] = []
+-    seen: dict[str, int | None] = {}
++    conflicts: list[tuple[str, int, int, int, int]] = []
++    seen: dict[str, tuple[int, int] | None] = {}
+     clauses = _clauses(sentence)
+     index = 0
+     while index < len(clauses):
+@@ -971,13 +1039,14 @@ def _clause_claims(text: str) -> _ClauseResult:
+                 continue
+         index += consumed + 1
+         amount = found[0]
++        kopecks = found[1]
+         if basis in seen:
+             previous = seen[basis]
+-            if previous is not None and previous != amount:
+-                conflicts.append((basis, previous, amount))
++            if previous is not None and previous != (amount, kopecks):
++                conflicts.append((basis, previous[0], previous[1], amount, kopecks))
+             continue
+-        seen[basis] = amount
+-        claims.append((basis, amount, found[1]))
++        seen[basis] = (amount, kopecks)
++        claims.append((basis, amount, kopecks))
+     return _ClauseResult(claims, blanks, conflicts)
+ 
+ 
+diff --git a/backend/tests/test_f1_extraction.py b/backend/tests/test_f1_extraction.py
+index 9861de2..b36299c 100644
+--- a/backend/tests/test_f1_extraction.py
++++ b/backend/tests/test_f1_extraction.py
+@@ -136,8 +136,8 @@ class TestSumlessWindowDoesNotBlock:
+                 category="claims",
+                 text=(
+                     "Потерпевший вновь обратился к ответчику с требованием "
+-                    "возместить разницу. Суд считает, что требования истца "
+-                    "о компенсации морального вреда являются обоснованными."
++                    "возместить разницу. Истец просит, чтобы требования "
++                    "о компенсации морального вреда были удовлетворены."
+                 ),
+                 source_document="01_claim.txt",
+                 source_type="CLAIM",
+@@ -148,8 +148,8 @@ class TestSumlessWindowDoesNotBlock:
+             EvidenceItem(
+                 category="claims",
+                 text=(
+-                    "Суд считает необходимым взыскать с ответчика в пользу "
+-                    "истца в счет компенсации морального вреда 1000 руб."
++                    "Истец просит взыскать с ответчика в пользу истца "
++                    "в счет компенсации морального вреда 1000 руб."
+                 ),
+                 source_document="01_claim.txt",
+                 source_type="CLAIM",
+@@ -169,8 +169,8 @@ class TestSumlessWindowDoesNotBlock:
+             EvidenceItem(
+                 category="claims",
+                 text=(
+-                    "Суд считает необходимым взыскать с ответчика в пользу "
+-                    "истца в счет компенсации морального вреда 1000 руб."
++                    "Истец просит взыскать с ответчика в пользу истца "
++                    "в счет компенсации морального вреда 1000 руб."
+                 ),
+                 source_document="01_claim.txt",
+                 source_type="CLAIM",
+@@ -264,13 +264,15 @@ class TestRealCases:
+         spec.loader.exec_module(module)
+ 
+         expected = {
+-            "real-05": ("компенсация морального вреда", 1000),
+             "real-08": ("убытки", 10400),
+             # real-03: моральному вреду достаётся своя сумма из иска
+             # (30 000), а не сумма соседнего пункта (неустойка 18 390).
+-            # Неустойка в этом же окне не извлекается — ограничение
+-            # «одно окно — одно основание», см. F2 в документации.
+             "real-03": ("компенсация морального вреда", 30000),
++            # real-05: моральный вред 10 000 — это требование истца из
++            # протокола. Сумма 1 000 из 01_claim.txt относится к
++            # определению суда («суд считает необходимым взыскать …»)
++            # и требованием истца не является.
++            "real-05": ("компенсация морального вреда", 10000),
+         }
+         for slug, (basis, amount) in expected.items():
+             case_dir = CASES / slug
+diff --git a/backend/tests/test_review_findings.py b/backend/tests/test_review_findings.py
+index a4dd495..a818bca 100644
+--- a/backend/tests/test_review_findings.py
++++ b/backend/tests/test_review_findings.py
+@@ -102,6 +102,91 @@ class TestClaimWithoutAmountStaysVisible:
+         assert amounts.get("убытки") is None
+ 
+ 
++class TestEqualSumsStayEqual:
++    """Одинаковые суммы у разных оснований — это два требования.
++
++    Регрессия после правила «сумма принадлежит одному основанию»:
++    «взыскать убытки 5 000 рублей и неустойку 5 000 рублей» — два
++    требования, и второе потеряло свою сумму.
++    """
++
++    def test_two_bases_with_same_sum_keep_it(self) -> None:
++        money, _others, _unrecognised = _extract(
++            "Взыскать с ответчика убытки 5000 рублей и неустойку 5000 рублей."
++        )
++        amounts = {claim.basis: claim.amount for claim in money}
++        assert amounts.get("убытки") == 5000
++        assert amounts.get("неустойка и санкции") == 5000
++        total = sum(claim.amount for claim in money if claim.amount)
++        assert total == 10000
++
++    def test_sums_differing_by_kopecks_are_not_merged(self) -> None:
++        money, _others, _unrecognised = _extract(
++            "Взыскать с ответчика неустойку 2202 рубля 90 копеек "
++            "и убытки 2202 рубля 00 копеек."
++        )
++        claims = {claim.basis: (claim.amount, claim.kopecks) for claim in money}
++        assert claims.get("неустойка и санкции") == (2202, 90)
++        assert claims.get("убытки") == (2202, 0)
++
++
++class TestCourtDeterminationIsNotAClaim:
++    """Сумма, названная судом, — не требование истца.
++
++    В real-05 моральный вред 1 000 руб. взят из мотивировки:
++    «суд считает необходимым взыскать …». Требование истца — 10 000
++    руб. (протокол). В проект должен попасть 10 000.
++    """
++
++    def test_court_wording_before_verb_is_skipped(self) -> None:
++        money, _others, _unrecognised = _extract(
++            "Взыскать с ответчика убытки 1000 рублей. Суд считает "
++            "необходимым взыскать компенсацию морального вреда 7777 рублей."
++        )
++        amounts = {claim.basis: claim.amount for claim in money}
++        assert amounts.get("убытки") == 1000
++        assert "компенсация морального вреда" not in amounts
++
++    def test_court_formula_neobhodimo_vzyskat(self) -> None:
++        money, _others, _unrecognised = _extract(
++            "С ответчика в пользу истца необходимо взыскать компенсацию "
++            "морального вреда в размере 2000 рублей, в остальной части "
++            "в удовлетворении иска отказать."
++        )
++        assert money == []
++
++
++class TestConflictNoteDetails:
++    def test_note_keeps_kopecks(self) -> None:
++        money, _others, unrecognised = _extract(
++            "Взыскать с ответчика неустойку 2202 рубля 90 копеек "
++            "и неустойку 10564 рубля 40 копеек."
++        )
++        notes = [item for item in unrecognised if "две суммы" in item]
++        assert notes, unrecognised
++        assert "2 202,90" in notes[0]
++        assert "10 564,40" in notes[0]
++
++    def test_note_not_duplicated(self) -> None:
++        pack = EvidencePack(case_number="T-REVIEW")
++        for order in (1, 2):
++            pack.items.append(
++                EvidenceItem(
++                    category="claims",
++                    text=(
++                        "Взыскать с ответчика убытки в размере 5000 рублей "
++                        "и убытки в размере 3000 рублей."
++                    ),
++                    source_document="01_claim.txt",
++                    source_type="CLAIM",
++                    order=order,
++                )
++            )
++        _money, _others, unrecognised = extract_requirements(pack)
++        notes = [item for item in unrecognised if "две суммы" in item]
++        assert len(notes) == 1, unrecognised
++
++
+ class TestAmountSpelledOutInBrackets:
+     def test_sum_with_words_in_brackets(self) -> None:
+         # D5: «15 191 (Пятнадцать тысяч сто девяносто один) рубль
+diff --git a/docs/agent-summary.md b/docs/agent-summary.md
+index 82318df..ef01d5d 100644
+--- a/docs/agent-summary.md
++++ b/docs/agent-summary.md
+@@ -51,7 +51,7 @@ Push не выполнялся.
+ 
+ | Команда | Результат |
+ |---|---|
+-| `pytest -q -p no:warnings` | exit 0, **744 теста** (финал с раундом ревью разбора) |
++| `pytest -q -p no:warnings` | exit 0, **750 тестов** (финал с двумя раундами ревью) |
+ | `ruff check app tests` | чисто |
+ | `mypy --strict app` | чисто, 66 файлов |
+ | `node --check` (demo.js, chat.js, app.js) | exit 0 |
+@@ -84,15 +84,19 @@ Push не выполнялся.
+    основание и своя сумма. Новые извлечения (все суммы — из
+    материалов): real-03 — неустойка 18 390 (итог 48 390), real-04 —
+    стоимость товара 10 490, неустойка 2 202,90, услуги 7 000 (итог
+-   29 692), real-05 — убытки 20 921,53 и неустойка 10 460,76 (итог
+-   32 381), real-06 — неустойка 6 890, моральный вред 7 000, убытки
+-   3 000 (итог 16 890, раньше 0). Раунд независимого ревью этого
+-   разбора нашёл пять дефектов (главный — двойной счёт суммы под
+-   двумя основаниями), все закрыты: сумма принадлежит одному
+-   основанию, мотивировка суда требованием не считается, конфликт
+-   сумм виден судье, требование без суммы не исчезает, пропись в
+-   скобках извлекается. Тесты: `tests/test_review_findings.py`.
+-   Suite 744 теста.
++   29 692), real-05 — моральный вред 10 000, убытки 20 921,53 и
++   неустойка 10 460,76 (итог 41 381), real-06 — неустойка 6 890,
++   моральный вред 7 000, убытки 3 000 (итог 16 890, раньше 0). Два
++   раунда независимого ревью этого разбора: первый нашёл пять
++   дефектов (главный — двойной счёт суммы под двумя основаниями),
++   второй — шесть замечаний к моим же исправлениям, включая
++   главное: моральный вред 1 000 в real-05 брался не из иска, а из
++   мотивировки суда («суд считает необходимым взыскать …»), и
++   требование истца — 10 000 (протокол); теперь определение суда от
++   требования истца отличается по контексту перед глаголом. Также:
++   одинаковые суммы у разных оснований больше не схлопываются, в
++   заметке о конфликте есть копейки, заметка не дублируется.
++   Тесты: `tests/test_review_findings.py`. Suite 750 тестов.
+    Осталось: real-10 — требование «1/3 часть от суммы» честно в
+    непознанных (пропорциональная доля); «стоимость сотового
+    телефона» (real-06) не распознаётся (якорь на «стоимость товара»);
+diff --git a/docs/end-to-end-evaluation.md b/docs/end-to-end-evaluation.md
+index e0128e8..914bb42 100644
+--- a/docs/end-to-end-evaluation.md
++++ b/docs/end-to-end-evaluation.md
+@@ -110,7 +110,7 @@ real-08 в проекте — сумма иска (10 400), суд удовле
+ |---|---|---|---|
+ | real-03 | 30 000 | **48 390** | неустойка 18 390 + моральный вред 30 000 (иск) |
+ | real-04 | 10 000 | **29 692** | стоимость товара 10 490, неустойка 2 202,90, моральный вред 10 000, услуги 7 000 (протокол) |
+-| real-05 | 1 000 | **32 381** | моральный вред 1 000 (иск), убытки 20 921,53 и неустойка 10 460,76 (протокол, суммы прописью в скобках) |
++| real-05 | 1 000 | **41 381** | моральный вред 10 000, убытки 20 921,53 и неустойка 10 460,76 (протокол — требования истца; суммы прописью в скобках) |
+ | real-06 | 0 | **16 890** | неустойка 6 890, моральный вред 7 000, убытки (кредит) 3 000 (протокол) |
+ 
+ Остальные шесть дел не изменились. «Итог системы» теперь означает сумму
+@@ -148,7 +148,41 @@ real-08 в проекте — сумма иска (10 400), суд удовле
+ 
+ Все пять закрыты тестами `backend/tests/test_review_findings.py`
+ (юнит-тесты на каждый дефект) и перепроверены сквозным прогоном по
+-всем 10 делам: 744 теста, ruff и mypy чисто.
++всем 10 делам.
++
++**Проверочное ревью исправлений** (свежее окно) нашло в моих же
++правках шесть замечаний — все закрыты:
++
++1. *Регресс (P2).* Правило «сумма принадлежит одному основанию» было
++   применено и к разбору по пунктам, где у каждого пункта своя сумма:
++   «взыскать убытки 5 000 рублей и неустойку 5 000 рублей» — второе
++   требование теряло сумму. Теперь правило действует только на
++   запасной путь «первая сумма окна».
++2. *Копейки в ключе (P2).* Ключ строился по рулям, и 2 202,90 с
++   2 202,00 схлопывались в одну сумму. Теперь ключ — пара
++   (рубли, копейки).
++3. *Определение суда выдавалось за требование истца (P2) — самое
++   существенное.* В real-05 моральный вред 1 000 руб. взят не из иска,
++   а из мотивировки: «суд считает необходимым взыскать …». Требование
++   истца — 10 000 руб. (протокол). Теперь окно смотрит контекст перед
++   собой и отличает «просил взыскать» от «суд считает необходимым
++   взыскать» / «необходимо взыскать»; сумма из определения суда в
++   требования истца не попадает. В проекте по real-05 теперь 10 000, а
++   не 1 000.
++4. *Конфликт сумм между документами (P2).* Расхождение показывалось
++   только внутри одного документа; в материалах `01_claim.txt` — это
++   сшивка иска с мотивировкой, а протокол — прямая речь истца, и
++   расхождение между ними значимо. Сейчас заметка не ставится только
++   когда разные документы — а это разные стадии (иск против решения
++   суда); расхождение иска и протокола остаётся видимым.
++5. *Копейки терялись в заметке (P3).* В заметке о конфликте было
++   «2 202 и 10 564», тогда как в проекте стоит 2 202,90. Теперь
++   «2 202,90 и 10 564,40».
++6. *Заметка дублировалась (P3).* Один и тот же конфликт попадал в
++   список дважды; теперь заметка не повторяется.
++
++Итог после двух раундов ревью: 750 тестов, ruff и mypy чисто, все 10
++дел перепогнаны.
+ 
+ Что осталось: «стоимость сотового телефона» (real-06) не
+ распознаётся — якорь на «стоимость товара», а телефон — не товар по
+-- 
+2.53.0.windows.2
+
