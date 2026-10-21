@@ -334,11 +334,13 @@ class TestSeveralClaimsInOneWindow:
 
     def test_real_06_penalty_moral_damage_and_losses(self) -> None:
         # Протокол real-06: неустойка 6 890, моральный вред 7 000,
-        # убытки (кредит) 3 000.
+        # убытки (кредит) 3 000, расходы на юридические услуги и
+        # представительство 9 000.
         found = self._money("real-06")
         assert found.get("неустойка и санкции") == 6890
         assert found.get("компенсация морального вреда") == 7000
         assert found.get("убытки") == 3000
+        assert found.get("расходы на представителя") == 9000
 
     def test_amount_of_neighbour_basis_not_taken(self) -> None:
         # «убытки, неустойку в сумме 2202 рублей»: у следующего
