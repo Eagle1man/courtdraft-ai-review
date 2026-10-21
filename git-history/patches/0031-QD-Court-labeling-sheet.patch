@@ -1,0 +1,165 @@
+From 9304113ee7d45444b739474ba659a85cfbe8f3e1 Mon Sep 17 00:00:00 2001
+From: Eagle1man <orel198611@gmail.com>
+Date: Wed, 21 Oct 2026 21:04:52 +0300
+Subject: [PATCH] =?UTF-8?q?=D0=92=D0=B5=D0=B4=D0=BE=D0=BC=D0=BE=D1=81?=
+ =?UTF-8?q?=D1=82=D1=8C=20=D1=80=D0=B0=D0=B7=D0=BC=D0=B5=D1=82=D0=BA=D0=B8?=
+ =?UTF-8?q?=20QD-Court=20=D0=B4=D0=BB=D1=8F=20=D1=8E=D1=80=D0=B8=D1=81?=
+ =?UTF-8?q?=D1=82=D0=B0:=2043=20=D0=BD=D0=B0=D0=BF=D1=80=D0=B0=D0=B2=D0=BB?=
+ =?UTF-8?q?=D0=B5=D0=BD=D0=B8=D1=8F=20=D1=81=20=D1=82=D0=B5=D0=BA=D1=81?=
+ =?UTF-8?q?=D1=82=D0=B0=D0=BC=D0=B8?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+scripts/qd_label_sheet.py собирает data/eval/qd_labeling_sheet.md: направления режима B и гипотезы C по 10 делам, колонки «Оценка юриста»/«Комментарий» пустые, шкала (полезно/не полезно/не относится) и разграничение «полезность направления ≠ юридическая валидность» — внутри листа. В docs/qd-court-evaluation.md ограничение о неразмеченности уточнено: лист готов, разметки нет.
+---
+ docs/qd-court-evaluation.md |   8 ++-
+ scripts/qd_label_sheet.py   | 117 ++++++++++++++++++++++++++++++++++++
+ 2 files changed, 123 insertions(+), 2 deletions(-)
+ create mode 100644 scripts/qd_label_sheet.py
+
+diff --git a/docs/qd-court-evaluation.md b/docs/qd-court-evaluation.md
+index 83462bd..be49429 100644
+--- a/docs/qd-court-evaluation.md
++++ b/docs/qd-court-evaluation.md
+@@ -59,8 +59,12 @@
+ ## Ограничения (честно)
+ 
+ - Метрики **технические**: полнота покрытия и полезность направлений
+-  юристом не размечались. Юридического превосходства C над B **не
+-  утверждается** — для этого нужна независимая юридическая разметка.
++  юристом пока не размечались — но лист для разметки готов:
++  `data/eval/qd_labeling_sheet.md` (43 строки: направления B и гипотезы C
++  по всем 10 делам, шкала и инструкция внутри; пересборка —
++  `scripts/qd_label_sheet.py`). Юридического превосходства C над B **не
++  утверждается** — оно станет возможно только после заполнения листа
++  юристом.
+ - `contradiction_amounts` срабатывает на любой многосуммной заявке
+   (точность сигнала низкая — это направление к проверке, а не факт
+   противоречия).
+diff --git a/scripts/qd_label_sheet.py b/scripts/qd_label_sheet.py
+new file mode 100644
+index 0000000..37acfcb
+--- /dev/null
++++ b/scripts/qd_label_sheet.py
+@@ -0,0 +1,117 @@
++"""Ведомость разметки направлений QD-Court для юриста.
++
++Что размечается: направления (B) и гипотезы (C) по каждому из 10 дел —
++длинные метрики из scripts/qd_court_eval.py бесполезны без текстов.
++Разметка отвечает только на один вопрос: помогает ли направление
++судье найти проверяемый вопрос по материалам дела. Юридическую
++валидность направления разметка не подтверждает — это отдельная
++оценка юриста на 20–30 делах (docs/evaluation.md).
++
++Ведомость — коммитится (data/eval/); архив гипотез
++(data/exploration/_eval/) в git не идёт и пересобирается прогоном.
++"""
++
++from __future__ import annotations
++
++import importlib.util
++import json
++import sys
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parent.parent
++CASES = ROOT / "data" / "demo" / "real" / "cases"
++EVAL_ROOT = ROOT / "data" / "exploration" / "_eval"
++SHEET = ROOT / "data" / "eval" / "qd_labeling_sheet.md"
++
++
++def _load(name: str, filename: str):
++    spec = importlib.util.spec_from_file_location(name, ROOT / "scripts" / filename)
++    module = importlib.util.module_from_spec(spec)
++    sys.modules[name] = module
++    spec.loader.exec_module(module)
++    return module
++
++
++def main() -> None:
++    import shutil
++
++    shutil.rmtree(EVAL_ROOT, ignore_errors=True)  # свежий архив на каждый прогон
++    build = _load("qdl_build_real_site", "build_real_site.py")
++    from app.exploration import ExplorationBudget, ExplorationService
++    from app.exploration.proposer import DirectionProposer
++    from app.exploration.verification import HypothesisVerifier
++
++    proposer = DirectionProposer()
++    verifier = HypothesisVerifier()
++    index = json.loads((CASES / "index.json").read_text(encoding="utf-8"))
++
++    lines: list[str] = [
++        "# Ведомость разметки направлений QD-Court",
++        "",
++        "Заполняет юрист. Одна строка — одно направление системы.",
++        "",
++        "**Шкала в колонке «Оценка юриста»** (и только эти значения):",
++        "",
++        "- `полезно` — направление помогает найти проверяемый вопрос по",
++        "  материалам дела (что стоит проверить, где искать);",
++        "- `не полезно` — вопрос тривиален, очевиден из описания дела или",
++        "  не ведёт ни к чему проверяемому;",
++        "- `не относится` — направление вне предмета данного дела.",
++        "",
++        "Колонку «Комментарий» заполнять только для «не полезно» и",
++        "«не относится» — одной фразой.",
++        "",
++        "Важно: оценивается **полезность направления как ориентира судье**,",
++        "не юридическая правильность вывода. Система выводы не делает",
++        "(принцип: решает судья), поэтому «верно/неверно юридически» —",
++        "это другая проверка (docs/evaluation.md, 20–30 дел).",
++        "",
++        "Режим B — генерация без архива (без фильтра новизны, повторы",
++        "возможны); режим C — QD-Court (архив, мутации, novelty). Один и",
++        "тот же случай может иметь похожие направления в обоих режимах —",
++        "размечать каждое отдельно, схожие оценивать одинаково.",
++        "",
++        "| # | Дело | Режим | ID | Направление | Статус системы | Оценка юриста | Комментарий |",
++        "|---|---|---|---|---|---|---|---|",
++    ]
++
++    counter = 0
++    for entry in index["cases"]:
++        slug = entry["slug"]
++        case_dir = CASES / slug
++        settings = build.make_settings(case_dir)
++        settings.ensure_dirs()
++        pack = build.build_pack(case_dir, settings)
++
++        for candidate in proposer.explore(pack):
++            counter += 1
++            verified = verifier.verify(candidate, pack)
++            text = str(getattr(candidate, "text", candidate)).replace("|", "\\|")
++            lines.append(
++                f"| {counter} | {slug} | B | {getattr(candidate, 'id', '?')} "
++                f"| {text} | {verified.status.value} | | |"
++            )
++
++        service = ExplorationService(EVAL_ROOT, ExplorationBudget())
++        report = service.run(slug, pack)
++        for hypothesis in report.hypotheses:
++            counter += 1
++            text = hypothesis.text.replace("|", "\\|")
++            lines.append(
++                f"| {counter} | {slug} | C | {hypothesis.id} "
++                f"| {text} | {hypothesis.status.value} | | |"
++            )
++
++    lines += [
++        "",
++        f"Итого строк для разметки: {counter}.",
++        "",
++        "Скрипт пересборки ведомости:",
++        "`backend\\.venv\\Scripts\\python.exe scripts\\qd_label_sheet.py`.",
++    ]
++    SHEET.write_text("\n".join(lines), encoding="utf-8")
++    print(f"rows={counter}")
++
++
++if __name__ == "__main__":
++    main()
+-- 
+2.53.0.windows.2
+
