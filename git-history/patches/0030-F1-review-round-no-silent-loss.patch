@@ -1,0 +1,334 @@
+From 124e5d4dabb5df65c160771243225ea0160d7149 Mon Sep 17 00:00:00 2001
+From: Eagle1man <orel198611@gmail.com>
+Date: Wed, 21 Oct 2026 00:27:47 +0300
+Subject: [PATCH] =?UTF-8?q?=D0=A0=D0=B0=D1=83=D0=BD=D0=B4=20=D1=80=D0=B5?=
+ =?UTF-8?q?=D0=B2=D1=8C=D1=8E=20F1:=20=D0=B2=D1=8B=D1=80=D0=B5=D0=B7=D0=B0?=
+ =?UTF-8?q?=D0=BD=D0=B8=D0=B5=20=D0=BF=D0=BE=D1=88=D0=BB=D0=B8=D0=BD=D1=8B?=
+ =?UTF-8?q?=20=D0=B1=D0=B5=D0=B7=20=D1=82=D0=B8=D1=85=D0=BE=D0=B9=20=D0=BF?=
+ =?UTF-8?q?=D0=BE=D1=82=D0=B5=D1=80=D0=B8=20=D1=82=D1=80=D0=B5=D0=B1=D0=BE?=
+ =?UTF-8?q?=D0=B2=D0=B0=D0=BD=D0=B8=D1=8F?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Все три дефекта независимого ревью закрыты: окно с пошлиной режется по предложениям/запятым/союзам (жадные границы больше не съедают окно целиком и останавливаются на запятой), ранний маркер обрезается до начала конструкции, формы «судебные расходы» и «расходы по уплате пошлины» вырезаются как и «госпошлина». Огрызок с числом из материалов уходит в непознанные, а не пропадает. Граница предложения только перед заглавной - копейки «руб. 00 коп.» не расщепляются. +4 регрессионных теста, всего 731/0, ruff, mypy чисто.
+---
+ backend/app/drafting/requirements.py | 136 ++++++++++++++++++++++-----
+ backend/tests/test_f1_extraction.py  |  66 ++++++++++++-
+ docs/agent-summary.md                |   7 +-
+ docs/end-to-end-evaluation.md        |  16 ++++
+ 4 files changed, 199 insertions(+), 26 deletions(-)
+
+diff --git a/backend/app/drafting/requirements.py b/backend/app/drafting/requirements.py
+index 342c69d..a095e51 100644
+--- a/backend/app/drafting/requirements.py
++++ b/backend/app/drafting/requirements.py
+@@ -31,6 +31,7 @@ from __future__ import annotations
+ import re
+ 
+ from app.agents.claim_phrases import (
++    CLAIM_VERB_RE,
+     NON_MONEY_BASES,
+     claim_basis,
+     looks_like_claim,
+@@ -365,11 +366,25 @@ def extract_requirements(
+             # предложении с требованием, топила его целиком: в деле
+             # real-08 фраза «расходы по оплате госпошлины в размере
+             # 416 руб.» стояла в одной строке с ущербом 10 400 руб.,
+-            # и система теряла взыскание долга, «исправив» только
+-            # подмену суммы. Пошлинный фрагмент вырезается, остальное
+-            # требование разбирается дальше.
++            # и система теряла взыскание долга. Пошлинные куски
++            # вырезаются (по предложениям, запятым и союзам), остаток
++            # разбирается дальше. Вырезание повторяется, потому что
++            # пошлина встречается разными формами («госпошлина»,
++            # «судебные расходы», «расходы по уплате пошлины»).
+             requirement_text = _without_fee_fragments(text)
+-            if not looks_like_claim(requirement_text):
++            for _ in range(2):
++                if not _is_fee_requirement(requirement_text):
++                    break
++                requirement_text = _without_fee_fragments(requirement_text)
++            if not requirement_text or not looks_like_claim(requirement_text):
++                # Чисто пошлинное окно (пустой остаток) — не требование
++                # по существу, выбрасывается по-прежнему. Если же в
++                # остатке есть число из материалов, но не похоже на
++                # требование, — не молчим: фрагмент показывается
++                # судье, иначе вырезание снова превращается в тихую
++                # потерю суммы.
++                if requirement_text and re.search(r"\d", requirement_text):
++                    unrecognised.append(_shorten(requirement_text))
+                 continue
+ 
+         if not requirement_text.strip():
+@@ -544,6 +559,47 @@ def extract_budget(pack: EvidencePack) -> str:
+     return ""
+ 
+ 
++# Признаки пошлины и судебных расходов — общие для проверки окна
++# (_is_fee_requirement) и для вырезания (_without_fee_fragments):
++# один источник, чтобы вырезание не расходилось с проверкой.
++_FEE_MARKERS: tuple[re.Pattern[str], ...] = (
++    re.compile(r"госпошлин\w*", re.I),
++    re.compile(r"судебн\w*\s+расход\w*|судебн\w*\s+издержк\w*", re.I),
++    re.compile(
++        r"расход\w*\s+(?:на|по)\s+(?:уплат\w+\s+)?"
++        r"(?:государственн\w*\s+)?пошлин",
++        re.I,
++    ),
++)
++
++# Окно режется по границам, на которых можно безопасно отделить
++# пошлину от денежного требования: конец предложения, запятая,
++# сочинительные союзы «и» и «а также» (перечисление требований).
++# Граница предложения — только если дальше заглавная: сокращения
++# вроде «416 руб. 00 коп.» иначе расщепляются, и копейки от
++# пошлины приклеиваются к соседней сумме.
++_FEE_CHUNK_SPLIT = re.compile(
++    r"((?<=[.;])\s+(?=[А-ЯЁ])|,\s*|\s+и\s+|\s+а\s+также\s+)",
++    re.I,
++)
++
++
++def _fee_marker_span(text: str) -> re.Match[str] | None:
++    """Самый ранний признак пошлины/судебных расходов в тексте окна.
++
++    Взять нужно первый по позиции, а не первый по списку: «расходы
++    по уплате государственной пошлины» содержит и «госпошлин», но
++    обрезать надо от начала всей конструкции, иначе после вырезания
++    останется огрызок «расходы по уплате государственной».
++    """
++    earliest: re.Match[str] | None = None
++    for marker in _FEE_MARKERS:
++        match = marker.search(text)
++        if match is not None and (earliest is None or match.start() < earliest.start()):
++            earliest = match
++    return earliest
++
++
+ def _is_fee_requirement(text: str) -> bool:
+     """Требование о пошлине или судебных расходах.
+ 
+@@ -551,29 +607,63 @@ def _is_fee_requirement(text: str) -> bool:
+     взыскивается отдельным пунктом по ст. 98 ГПК РФ, а в списке
+     требований по существу она не должна занимать место.
+     """
+-    low = text.lower()
+-    return bool(
+-        re.search(r"госпошлин\w*|судебн\w*\s+расход\w*", low)
+-        or re.search(
+-            r"расход\w*\s+(?:на|по)\s+(?:уплат\w+\s+)?"
+-            r"(?:государственн\w*\s+)?пошлин",
+-            low,
+-        )
+-    )
++    return _fee_marker_span(text) is not None
+ 
+ 
+ def _without_fee_fragments(text: str) -> str:
+-    """Вырезать пошлинные фрагменты из окна требования.
+-
+-    Окно пропускалось целиком, если в нём упоминалась пошлина, но
+-    пошлина часто стоит в одном предложении с денежным требованием
+-    («ущерб в размере 10 400 руб., … расходы по оплате госпошлины в
+-    размере 416 руб.»). Фрагмент от ближайшей границы предложения или
+-    запятой до конца пошлинного упоминания удаляется; оставшийся текст
+-    заново проверяется на признаки требования.
++    """Вырезать пошлинные куски из окна требования.
++
++    Раньше окно пропускалось целиком, если в нём упоминалась пошлина,
++    но пошлина часто стоит в одном перечислении с денежными
++    требованиями («ущерб в размере 10 400 руб., расходы по оплате
++    госпошлины в размере 416 руб.») — и вместе с окном терялось само
++    требование (real-08).
++
++    Теперь окно режется по границам из _FEE_CHUNK_SPLIT; кусок
++    выкидывается, если содержит признак пошлины. Когда признак стоит
++    в середине куска без собственных границ («взыскать госпошлину и
++    ущерб»), кусок обрезается до признака: «взыскать» остаётся,
++    пошлина уходит. Остаток без признаков требования и без числа
++    (огрызок вроде «расходы по оплате») выбрасывается — он вошёл бы
++    в окно мусором. Если после вырезания остаток перестал быть
++    похож на требование, вызывающий код не молчит: показывает
++    фрагмент судье как нераспознанный.
+     """
+-    cleaned = re.sub(r"[^.;,]*госпошлин\w*[^.;]*", " ", text, flags=re.I)
+-    cleaned = re.sub(r"\s{2,}", " ", cleaned)
++    chunks = _FEE_CHUNK_SPLIT.split(text)
++    parsed: list[tuple[str, re.Match[str] | None, str]] = []
++    for index in range(0, len(chunks), 2):
++        segment = chunks[index].strip()
++        carry = chunks[index - 1] if index > 0 else ""
++        if not segment:
++            continue
++        parsed.append((segment, _fee_marker_span(segment), carry))
++    # Цифры вне пошлинных кусков: пошлина стоит в одном перечислении
++    # с денежным требованием. Огрызок «взыскать» сохраняется только
++    # при таком соседе — иначе в окне была одна пошлина, и обрезанный
++    # глагол превратился бы в шум в списке непознанных.
++    neighbour_digits = re.compile(r"\d")
++    has_neighbour_digits = any(
++        neighbour_digits.search(segment)
++        for segment, marker, _carry in parsed
++        if marker is None
++    )
++    kept: list[str] = []
++    for segment, marker, carry in parsed:
++        if marker is None:
++            kept.append((carry if kept else "") + segment)
++            continue
++        remainder = segment[: marker.start()].rstrip(" \t,;")
++        if remainder and neighbour_digits.search(remainder):
++            # Признак в середине куска с суммой до него: «взыскать
++            # долг 5000 руб госпошлину» → хвост отрезается, долг
++            # остаётся.
++            kept.append((carry if kept else "") + remainder)
++        elif remainder and CLAIM_VERB_RE.search(remainder) and has_neighbour_digits:
++            # «взыскать госпошлину и ущерб 10400 руб.» → «взыскать и
++            # ущерб»: глагол требования надо сохранить, рядом есть
++            # требование с суммой.
++            kept.append((carry if kept else "") + remainder)
++    cleaned = re.sub(r"\s{2,}", " ", "".join(kept))
+     return cleaned.strip(" \t,;")
+ 
+ 
+diff --git a/backend/tests/test_f1_extraction.py b/backend/tests/test_f1_extraction.py
+index fb756f2..33d356e 100644
+--- a/backend/tests/test_f1_extraction.py
++++ b/backend/tests/test_f1_extraction.py
+@@ -49,6 +49,68 @@ class TestFeeDoesNotSwallowClaim:
+             ("убытки", 10400)
+         ]
+ 
++    def test_fee_without_separator_keeps_claim(self) -> None:
++        # D1: раньше жадная голова regexp съедала всё от начала окна,
++        # если перед пошлиной не было запятой — «взыскать госпошлину и
++        # ущерб 10400 руб.» пропадало целиком и молча.
++        pack = _pack()
++        pack.items.append(
++            EvidenceItem(
++                category="claims",
++                text="Взыскать госпошлину и ущерб 10400 руб.",
++                source_document="01_claim.txt",
++                source_type="CLAIM",
++                order=1,
++            )
++        )
++        money, _others, unrecognised = extract_requirements(pack)
++        assert [(claim.basis, claim.amount) for claim in money] == [
++            ("убытки", 10400)
++        ]
++        assert unrecognised == []
++
++    def test_fee_payment_form_keeps_debt(self) -> None:
++        # D3 (форма «расходы по уплате … пошлины» не вырезалась
++        # общим regexp и топила окно целиком).
++        pack = _pack()
++        pack.items.append(
++            EvidenceItem(
++                category="claims",
++                text=(
++                    "Взыскать долг 5000 руб., расходы по уплате "
++                    "государственной пошлины в размере 400 руб."
++                ),
++                source_document="01_claim.txt",
++                source_type="CLAIM",
++                order=1,
++            )
++        )
++        money, _others, _unrecognised = extract_requirements(pack)
++        assert [(claim.basis, claim.amount) for claim in money] == [
++            ("задолженность по договору", 5000)
++        ]
++
++    def test_court_costs_form_keeps_claim(self) -> None:
++        # D3 (форма «судебные расходы» в перечислении после «а также»).
++        pack = _pack()
++        pack.items.append(
++            EvidenceItem(
++                category="claims",
++                text=(
++                    "Просит взыскать с ответчика материальный ущерб в "
++                    "размере 10400 руб., а также судебные расходы на "
++                    "оплату экспертизы в размере 6000 руб."
++                ),
++                source_document="01_claim.txt",
++                source_type="CLAIM",
++                order=1,
++            )
++        )
++        money, _others, _unrecognised = extract_requirements(pack)
++        assert [(claim.basis, claim.amount) for claim in money] == [
++            ("убытки", 10400)
++        ]
++
+     def test_fee_only_window_still_skipped(self) -> None:
+         pack = _pack()
+         pack.items.append(
+@@ -60,8 +122,10 @@ class TestFeeDoesNotSwallowClaim:
+                 order=1,
+             )
+         )
+-        money, _others, _unrecognised = extract_requirements(pack)
++        money, _others, unrecognised = extract_requirements(pack)
+         assert money == []
++        # чисто пошлинное окно не загромождает непознанное
++        assert unrecognised == []
+ 
+ 
+ class TestSumlessWindowDoesNotBlock:
+diff --git a/docs/agent-summary.md b/docs/agent-summary.md
+index ed388a2..dac05d5 100644
+--- a/docs/agent-summary.md
++++ b/docs/agent-summary.md
+@@ -51,7 +51,7 @@ Push не выполнялся.
+ 
+ | Команда | Результат |
+ |---|---|
+-| `pytest -q -p no:warnings` | exit 0, **722 теста** (финал после доработки F1: 728) |
++| `pytest -q -p no:warnings` | exit 0, **731 тест** (финал с раундом ревью F1) |
+ | `ruff check app tests` | чисто |
+ | `mypy --strict app` | чисто, 66 файлов |
+ | `node --check` (demo.js, chat.js, app.js) | exit 0 |
+@@ -70,7 +70,10 @@ Push не выполнялся.
+    (real-05: компенсация морального вреда 1000 руб. — совпало с манифестом).
+    Тесты на живых делах: `tests/test_f1_extraction.py`. Контроль
+    `CLAIM_AMOUNT_UNPARSED` срабатывает и тогда, когда требование
+-   извлеклось, но без суммы. Осталось: real-10 — требование «1/3 часть
++   извлеклось, но без суммы. Раунд независимого ревью закрыл в
++   вырезании пошлины три способа тихой потери (жадные границы,
++   формы «судебные расходы» и «расходы по уплате … пошлины») —
++   suite 731 тест. Осталось: real-10 — требование «1/3 часть
+    от суммы» честно в непознанных (пропорциональная доля); формат суммы
+    прописью («20 921 (двадцать…) рубль») не покрыт; real-08 в проекте —
+    сумма иска 10 400, суд удовлетворил частично (10 148) — вывод исхода
+diff --git a/docs/end-to-end-evaluation.md b/docs/end-to-end-evaluation.md
+index ed651d5..8d74002 100644
+--- a/docs/end-to-end-evaluation.md
++++ b/docs/end-to-end-evaluation.md
+@@ -54,6 +54,22 @@ backend\.venv\Scripts\python.exe scripts\tmp_amount_probe.py  # суммы в и
+ Покрытие: `tests/test_f1_extraction.py` (юнит-тесты + живые дела
+ real-05/08), все 10 дел перепогнаны `scripts/e2e_audit.py`.
+ 
++Раунд независимого ревью доработки (`f74f6fb`) нашёл в вырезании
++пошлинных фрагментов три способа тихой потери — все закрыты:
++
++- жадные границы regexp съедали окно целиком без запятой перед
++  «госпошлиной» («Взыскать госпошлину и ущерб 10400 руб.» → пропало
++  молча) — теперь окно режется по предложениям, запятым, союзам
++  «и»/«а также», а признаки в середине куска обрезаются до
++  маркера;
++- хвост вырезания не останавливался на запятой и сжирал соседние
++  требования перечисления;
++- формы «судебные расходы» и «расходы по уплате … пошлины» не
++  вырезались вовсе и топили окно.
++
++Огрызок вырезания с числом из материалов показывается судье как
++непознанный, а не выбрасывается молча. Итого в suite — 731 тест.
++
+ Что осознанно осталось: real-10 — требование «1/3 часть от суммы»
+ (пропорциональная доля) остаётся в непознанных; формат суммы прописью
+ «20 921 (двадцать…) рубль» не покрывается примыканием к «руб»; сумма
+-- 
+2.53.0.windows.2
+
