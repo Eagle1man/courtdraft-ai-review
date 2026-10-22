@@ -185,6 +185,14 @@ async def process(case_dir: Path) -> dict[str, Any]:
                     "basis": claim.basis,
                     "source": claim.source,
                     "outcome": str(claim.outcome.value),
+                    # Присуждённая сумма при частичном удовлетворении:
+                    # по ней аудит сверяет итог резолютивной части.
+                    "granted_amount": (
+                        float(claim.granted_amount)
+                        if claim.granted_amount is not None
+                        else None
+                    ),
+                    "granted_kopecks": int(claim.granted_kopecks),
                 }
                 for claim in money
             ],

@@ -103,26 +103,40 @@ def audit_case(case_dir: Path) -> dict[str, Any]:
     # 10 000,00 + 20 921,53 + 10 460,76 печаталось как «41 381 руб.
     # 29 коп.» вместо «41 382 руб. 29 коп.» (real-05).
     #
-    # Считаются только удовлетворённые требования: резолюция строит
-    # итог по тем, что присуждены, а отказные и частичные в него не
-    # входят. Иначе сверка завела бы дефект на правильном выводе.
+    # Считается присуждённое: полная сумма при полном удовлетворении,
+    # сумма суда — при частичном (как в резолютивной). Пошлина и иные
+    # расходы входят, только если исход ни по одному требованию не
+    # отличается от «удовлетворено»: иначе ч. 1 ст. 98 ГПК РФ
+    # присуждает их пропорционально, а пропорцию считает судья.
     total_line = re.search(
-        r"Всего подлежит взысканию\s+([\d\s   ]+)\s*\([^)]*\)\s*руб\.\s*"
+        r"Всего подлежит взысканию\s+([\d\s   ]+)\s*\([^)]*\)\s*руб\.\s*"
         r"(\d{1,2})\s*коп",
         operative,
     )
     costs = float(rules.get("costs") or 0)
-    satisfied = [
-        claim
-        for claim in (rules.get("claims") or [])
-        if claim.get("outcome", "satisfied") == "satisfied"
-    ]
-    expected_kopecks = sum(int(claim.get("kopecks") or 0) for claim in satisfied)
+    all_claims = rules.get("claims") or []
+    proportional = any(
+        claim.get("outcome", "satisfied") != "satisfied" for claim in all_claims
+    )
+    counted: list[tuple[float, int]] = []
+    for claim in all_claims:
+        outcome = claim.get("outcome", "satisfied")
+        if outcome == "satisfied":
+            counted.append(
+                (float(claim.get("amount") or 0), int(claim.get("kopecks") or 0))
+            )
+        elif outcome == "partial" and claim.get("granted_amount") is not None:
+            counted.append(
+                (
+                    float(claim["granted_amount"]),
+                    int(claim.get("granted_kopecks") or 0),
+                )
+            )
+    expected_kopecks = sum(kop for _, kop in counted)
     expected_total = (
-        sum(float(claim.get("amount") or 0) for claim in satisfied)
+        sum(amount for amount, _ in counted)
         + expected_kopecks // 100
-        + fee
-        + costs
+        + (0 if proportional else fee + costs)
     )
     expected_kopecks = expected_kopecks % 100
     if total_line:
