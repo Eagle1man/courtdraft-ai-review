@@ -167,9 +167,15 @@ async def process(case_dir: Path) -> dict[str, Any]:
         pack,
     )
 
-    total = sum(
+    total_rubles = sum(
         float(claim.amount or 0) for claim in money if claim.amount is not None
     )
+    total_kopecks = sum(int(claim.kopecks) for claim in money)
+    # Копейки переносятся в рубли: 20 921,53 + 10 460,76 дают 41 382,29,
+    # а не 41 381,29. Без переноса итог в резолюции расходился с
+    # суммой перечисленных пунктов на один рубль (real-05).
+    total = total_rubles + total_kopecks // 100
+    total_kopecks = total_kopecks % 100
     return {
         "rules": {
             "claims": [
@@ -203,6 +209,7 @@ async def process(case_dir: Path) -> dict[str, Any]:
                 "defendant": parties.defendant,
             },
             "total": total,
+            "total_kopecks": total_kopecks,
             "total_with_fee": total + float(fee or 0),
         },
         "operative_text": operative.render(),

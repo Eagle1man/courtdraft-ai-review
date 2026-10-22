@@ -74,6 +74,29 @@ def audit_case(case_dir: Path) -> dict[str, Any]:
     if abs(total_with_fee - (total + fee)) > 0.01:
         defects.append(f"арифметика: итог {total_with_fee} != {total}+{fee}")
 
+    # 3a. Итог в резолюции против суммы пунктов — с копейками.
+    # Без этой сверки перенос копеек в рубли проходил незамеченным:
+    # 10 000,00 + 20 921,53 + 10 460,76 печаталось как «41 381 руб.
+    # 29 коп.» вместо «41 382 руб. 29 коп.» (real-05).
+    total_line = re.search(
+        r"Всего подлежит взысканию\s+([\d\s\u00a0\u202f]+)\s*\([^)]*\)\s*руб\.\s*"
+        r"(\d{1,2})\s*коп",
+        operative,
+    )
+    costs = float(rules.get("costs") or 0)
+    expected_total = total + fee + costs
+    expected_kopecks = int(rules.get("total_kopecks") or 0)
+    if total_line:
+        stated = float(total_line.group(1).replace(" ", "").replace("\u00a0", ""))
+        stated_kopecks = int(total_line.group(2))
+        if abs(stated - expected_total) > 0.01 or stated_kopecks != expected_kopecks:
+            defects.append(
+                f"итог в резолюции: {stated} руб. {stated_kopecks:02d} коп. "
+                f"!= {expected_total} руб. {expected_kopecks:02d} коп."
+            )
+    elif expected_total:
+        defects.append("в резолюции нет строки «Всего подлежит взысканию»")
+
     # 4. Покрытие документов: материалы без источников
     unused = sorted(f for f in files if f not in {s.split(",")[0].strip() for s in sources}
                     and f not in {"manifest.json", "court_decision_reference.txt"})

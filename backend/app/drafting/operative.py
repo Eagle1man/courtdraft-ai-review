@@ -761,6 +761,19 @@ def build_operative(
             if costs is not None:
                 granted.append((costs, 0))
 
+    # Иные расходы по ст. 100 ГПК РФ не зависят от пошлины: их понёс
+    # истец, и суд возвращает их независимо от того, известна ли
+    # пошлина. Раньше пункт о них жил внутри блока пошлины, и в деле
+    # без пошлины (real-04) иные расходы исчезали из проекта целиком
+    # и не попадали в итог «а всего».
+    if costs is not None and not (fee_stakes and fee_paid is not None):
+        result.items.append(
+            f"Взыскать с {named.defendant_genitive} в пользу "
+            f"{named.plaintiff_genitive} иные расходы в размере "
+            f"{_amount(costs)} (ст. 100 ГПК РФ)."
+        )
+        granted.append((costs, 0))
+
     # 5. Итог «а всего». Так пишут в резолюции: одна цифра, из которой
     #    видно общий размер взыскания.
     if total_line and granted:
