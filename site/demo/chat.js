@@ -194,7 +194,11 @@
       var data = rules();
       var claims = data.claims || [];
       var fee = data.fee_paid;
-      var total = data.total_with_fee;
+      var costs = data.costs;
+      /* Итог в резолюции «всего подлежит взысканию» включает иные
+         расходы (ст. 100 ГПК РФ), поэтому и здесь сумма должна быть
+         та же, а не только требования с пошлиной. */
+      var total = (data.total_with_fee || 0) + (costs || 0);
       if (!total) {
         return (
           "<p>Итог по делу не посчитан: суммы требований в материалах " +
@@ -213,6 +217,11 @@
       if (fee) {
         parts.push(
           escapeHtml(rubles(fee)) + " — государственная пошлина " + cite("ст. 98 ГПК РФ")
+        );
+      }
+      if (costs) {
+        parts.push(
+          escapeHtml(rubles(costs)) + " — иные расходы " + cite("ст. 100 ГПК РФ")
         );
       }
       return (

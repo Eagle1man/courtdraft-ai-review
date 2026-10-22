@@ -116,7 +116,7 @@ CLAIM_BASIS_PATTERNS: list[tuple[re.Pattern[str], str]] = [
         # в резолюцию не попадало.
         re.compile(
             r"(?:взыска\w+|возмести\w*)\s+" + _BETWEEN
-            + r"(?:возмещен\w*\s+)?расход\w*\s+на\s+(?:[\w-]+\s+){0,4}"
+            + r"(?:возмещен\w*\s+)?расход\w*\s+(?:на|по\s+оплате)\s+(?:[\w-]+\s+){0,4}"
             r"(?:представител\w+|юрист\w+|адвокат\w+|юридическ\w*\s+услуг)",
             re.I,
         ),
@@ -242,7 +242,7 @@ CLAIM_BASIS_PATTERNS: list[tuple[re.Pattern[str], str]] = [
 CLAIM_BASIS_ANCHORS: list[tuple[re.Pattern[str], str]] = [
     (
         re.compile(
-            r"расход\w*\s+на\s+(?:[\w-]+\s+){0,4}"
+            r"расход\w*\s+(?:на|по\s+оплате)\s+(?:[\w-]+\s+){0,4}"
             r"(?:представител\w+|юрист\w+|адвокат\w+|юридическ\w*\s+услуг)",
             re.I,
         ),

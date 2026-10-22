@@ -44,6 +44,30 @@ def _files_of(case_dir: Path) -> set[str]:
     return {p.name for p in case_dir.iterdir() if p.is_file()}
 
 
+def _case_text(case_dir: Path) -> str:
+    """Весь текст материалов дела одной строкой."""
+    parts: list[str] = []
+    for path in sorted(case_dir.glob("*.txt")):
+        parts.append(path.read_text(encoding="utf-8", errors="replace"))
+    return "\n".join(parts)
+
+
+def _amount_in_text(amount: float, kopecks: int, text: str) -> bool:
+    """Есть ли сумма в тексте дела (в любой из обычных записей)."""
+    whole = int(amount)
+    digits = str(whole)
+    spaced = f"{whole:,}".replace(",", " ")
+    candidates = {digits, spaced}
+    if kopecks:
+        candidates |= {
+            f"{digits},{kopecks:02d}",
+            f"{spaced},{kopecks:02d}",
+            f"{digits} {kopecks:02d}",
+            f"{spaced} {kopecks:02d}",
+        }
+    return any(candidate in text for candidate in candidates)
+
+
 def audit_case(case_dir: Path) -> dict[str, Any]:
     build = _load("e2e_build_real_site", "build_real_site.py")
     processed = asyncio.run(build.process(case_dir))
@@ -123,6 +147,21 @@ def audit_case(case_dir: Path) -> dict[str, Any]:
                     and f not in {"manifest.json", "court_decision_reference.txt"})
     if unused:
         defects.append(f"документы без источников: {unused}")
+
+    # 4a. Числа — только из материалов. Каждая сумма в резолюции должна
+    # дословно встречаться в тексте дела: иначе в проекте появилось бы
+    # число, которого в материалах нет.
+    case_text = _case_text(case_dir)
+    for claim in rules.get("claims") or []:
+        amount = float(claim.get("amount") or 0)
+        if amount <= 0:
+            continue
+        kopecks = int(claim.get("kopecks") or 0)
+        if not _amount_in_text(amount, kopecks, case_text):
+            defects.append(
+                f"сумма не найдена в материалах: {amount} "
+                f"({claim.get('basis')}, {claim.get('source')})"
+            )
 
     # 5. Пробелы без маркера
     gaps = rules.get("gaps") or []
