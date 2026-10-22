@@ -376,18 +376,21 @@ def _amount_with_words(value: float, kopecks: int = 0) -> str:
     return f"{formatted} ({words}) руб. {kopecks:02d} коп."
 
 
-def _sum_kopecks(values: list[tuple[float, int]]) -> int:
-    """Сложить копейки по требованиям.
+def _sum_amounts(values: list[tuple[float, int]]) -> tuple[float, int]:
+    """Сложить суммы требований с переносом копеек в рубли.
 
     Копейки хранятся отдельно от рублей, поэтому итог нельзя получить
     простым сложением сумм: 5034 руб. 79 коп. плюс 400 руб. — это
     5 434 руб. 79 коп., а не 5 434 руб. 00 коп. Ошибка была найдена
     тестом на данных реального решения.
+
+    Перенос нужен в обе стороны: 20 921,53 + 10 460,76 дают 41 382,29, а
+    не 41 381,29. Без переноса итог в резолюции расходился с суммой
+    перечисленных пунктов на один рубль (real-05).
     """
-    total = 0
-    for _, kopecks in values:
-        total += kopecks
-    return total % 100
+    rubles = sum(value for value, _ in values)
+    kopecks = sum(kopecks for _, kopecks in values)
+    return rubles + kopecks // 100, kopecks % 100
 
 
 class Procedure(StrEnum):
@@ -761,10 +764,10 @@ def build_operative(
     # 5. Итог «а всего». Так пишут в резолюции: одна цифра, из которой
     #    видно общий размер взыскания.
     if total_line and granted:
-        total_rubles = sum(value for value, _ in granted)
+        total_rubles, total_kopecks = _sum_amounts(granted)
         result.items.append(
             f"Всего подлежит взысканию "
-            f"{_amount_with_words(total_rubles, _sum_kopecks(granted))}"
+            f"{_amount_with_words(total_rubles, total_kopecks)}"
         )
 
     # 6. Последствия заочного решения идут ДО права на обжалование.

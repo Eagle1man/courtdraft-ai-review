@@ -80,7 +80,7 @@ FEE_PATTERNS = [
 COSTS_PATTERN = re.compile(
     r"(?:иные\s+расход\w*|расход\w*\s+на\s+(?:поездк|почтов\w+|\S+_ expert)"
     r"|экспертиз\w*\s+и|расход\w*\s+на\s+оплат\w*\s+экспертиз\w*)"
-    r"|затрат\w*\s+на\s+проведение\s+экспертиз\w*",
+    r"|(?:затрат\w*|расход\w*)\s+на\s+проведение\s+экспертиз\w*",
     re.I,
 )
 
@@ -232,7 +232,12 @@ def _claim_windows(
             chunk = text[start : min(end, start + CLAIM_WINDOW)]
             if chunk.strip():
                 context = text[max(0, start - 200) : start]
-                windows.append((name, chunk, context))
+                # Для различения «требование истца» и «определение суда»
+                # важен только конец контекста: слова суда из соседнего
+                # предложения не должны превращать требование истца в
+                # приговор.
+                tail = re.split(r"(?<=[.;])\s+", context)
+                windows.append((name, chunk, tail[-1] if tail else ""))
     return windows
 
 
@@ -469,6 +474,7 @@ def extract_requirements(
                         clause_name,
                         int(existing_clause.amount),
                         existing_clause.kopecks,
+                        existing_clause.source,
                         clause_whole,
                         clause_kopecks,
                         source,
@@ -492,7 +498,13 @@ def extract_requirements(
             _add_note(
                 unrecognised,
                 _conflict_note(
-                    conflict_name, first_sum, first_kop, second_sum, second_kop, source
+                    conflict_name,
+                    first_sum,
+                    first_kop,
+                    source,
+                    second_sum,
+                    second_kop,
+                    source,
                 ),
             )
 
@@ -578,6 +590,7 @@ def extract_requirements(
                     basis,
                     int(existing.amount),
                     existing.kopecks,
+                    existing.source,
                     whole,
                     kopecks,
                     source,
@@ -835,22 +848,31 @@ _COURT_DETERMINATION_RE = re.compile(
     r"суд(?:ом)?\b[^.]{0,120}?(?:считает\s+необходимым|определил|постановил|"
     r"присудил|решил|удовлетворил|отказал|признал)"
     r"|считает\s+необходимым"
-    r"|необходимо\s+взыскать"
     r"|необходимо\s*$"
     r"|подлежит\s+взысканию"
     r"|подлежат\s+взысканию",
     re.I,
 )
 
+# Истец в именительном падеже — значит, говорит он, а не суд. «В пользу
+# истца» (родительный) — суд формулирует приговор, истец — нет.
+_ACTOR_IS_PLAINTIFF_RE = re.compile(r"\bистец\b", re.I)
+
 
 def _is_court_determination(context: str) -> bool:
     """Определение суда, а не требование истца.
 
-    Смотрится только текст ПЕРЕД окном: «суд считает необходимым
-    взыскать …» — это мотивировка, «просил взыскать …» — требование.
-    Внутри окна смотреть нельзя: там может быть следующее требование
-    истца, а слова суда стоят уже после глагола.
+    Смотрится только последнее предложение перед окном: «суд считает
+    необходимым взыскать …» — это мотивировка, «просил взыскать …» —
+    требование. Смотреть дальше нельзя: определение суда в соседнем
+    предложении не делает требованием истца следующее окно.
+
+    Если в этом предложении истец назван как действующее лицо
+    («истец считает, что необходимо взыскать …»), требование остаётся
+    требованием истца.
     """
+    if _ACTOR_IS_PLAINTIFF_RE.search(context):
+        return False
     return bool(_COURT_DETERMINATION_RE.search(context))
 
 
@@ -883,17 +905,21 @@ def _conflict_note(
     basis: str,
     first: int,
     first_kopecks: int,
+    first_source: str,
     second: int,
     second_kopecks: int,
-    source: str,
+    second_source: str,
 ) -> str:
-    """Заметка для судьи: по одному основанию в материалах две суммы.
+    """Заметка для судьи: по одному основанию в материалах разные суммы.
 
     Молчать здесь нельзя: в проекте стоит одна сумма, а судья видит
-    в материалах две. Какая из них просительная — вопрос суда, но
-    расхождение обязано быть видно. Копейки в заметке тоже: в
-    проекте стоит 2 202,90, и «2 202» в заметке смотрелось бы как
-    опечатка.
+    в материалах другую. Копейки в заметке тоже: в проекте стоит
+    2 202,90, и «2 202» в заметке смотрелось бы как опечатка.
+
+    Формулировка намеренно осторожная: по основанию «задолженность по
+    договору» две суммы в разных документах могут быть двумя разными
+    задолженностями (в real-01 — ЖКУ за один период и ремонт за
+    другой), а не уточнением одной. Что просить — решает судья.
     """
     def number(value: int, kopecks: int) -> str:
         whole = f"{value:,}".replace(",", " ")
@@ -902,9 +928,10 @@ def _conflict_note(
         return whole
 
     return (
-        f"по требованию «{basis}» в материалах две суммы: "
-        f"{number(first, first_kopecks)} и {number(second, second_kopecks)} "
-        f"руб. ({source}) — какая просительная, решает судья"
+        f"по требованию «{basis}» в материалах разные суммы: "
+        f"{number(first, first_kopecks)} руб. ({first_source}) и "
+        f"{number(second, second_kopecks)} руб. ({second_source}) — "
+        f"уточнение или разные требования, решает судья"
     )
 
 
