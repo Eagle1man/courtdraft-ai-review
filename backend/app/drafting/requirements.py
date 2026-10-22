@@ -79,7 +79,8 @@ FEE_PATTERNS = [
 # Иные расходы по ст. 100 ГПК РФ.
 COSTS_PATTERN = re.compile(
     r"(?:иные\s+расход\w*|расход\w*\s+на\s+(?:поездк|почтов\w+|\S+_ expert)"
-    r"|экспертиз\w*\s+и|расход\w*\s+на\s+оплат\w*\s+экспертиз\w*)",
+    r"|экспертиз\w*\s+и|расход\w*\s+на\s+оплат\w*\s+экспертиз\w*)"
+    r"|затрат\w*\s+на\s+проведение\s+экспертиз\w*",
     re.I,
 )
 
@@ -316,11 +317,17 @@ def _fee_from(items: list[EvidenceItem]) -> int | None:
 
 
 def _costs_from(items: list[EvidenceItem]) -> int | None:
-    """Иные расходы из материалов дела."""
+    """Иные расходы из материалов дела.
+
+    Сумма берётся после признака расходов, а не первая в предложении:
+    в одной фразе протокола перечислены и неустойка, и затраты на
+    экспертизу, и первой стоит неустойка.
+    """
     for item in items:
-        if not COSTS_PATTERN.search(item.text):
+        marker = COSTS_PATTERN.search(item.text)
+        if marker is None:
             continue
-        value = _find_amount(item.text)
+        value = _find_amount(item.text[marker.end():])
         if value and 1_000 < value < 1_000_000_000:
             return value
     return None

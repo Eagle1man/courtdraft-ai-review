@@ -187,6 +187,35 @@ class TestConflictNoteDetails:
         assert len(notes) == 1, unrecognised
 
 
+class TestCostsAmountBelongsToMarker:
+    """Сумма иных расходов — та, что стоит после признака расходов.
+
+    В протоколе real-04 в одной фразе перечислены и неустойка
+    (10 564,40), и затраты на проведение экспертизы (3 000). Первой
+    стоит неустойка, и «иные расходы» без привязки к признаку
+    показывали 10 564.
+    """
+
+    def test_costs_taken_after_marker(self) -> None:
+        from app.drafting.requirements import extract_fee_and_costs
+
+        pack = EvidencePack(case_number="T-REVIEW")
+        pack.items.append(
+            EvidenceItem(
+                category="claims",
+                text=(
+                    "Просит взыскать неустойку 10564 рубля 40 копеек, "
+                    "затраты на проведение экспертизы в сумме 3000 рублей."
+                ),
+                source_document="05_protocol.txt",
+                source_type="CLAIM",
+                order=1,
+            )
+        )
+        _fee, costs = extract_fee_and_costs(pack)
+        assert costs == 3000
+
+
 class TestAmountSpelledOutInBrackets:
     def test_sum_with_words_in_brackets(self) -> None:
         # D5: «15 191 (Пятнадцать тысяч сто девяносто один) рубль
