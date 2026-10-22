@@ -235,11 +235,24 @@ def collect_rules(pack: EvidencePack) -> dict:
                 "basis": claim.basis,
                 "source": claim.source,
                 "outcome": str(claim.outcome.value),
+                # Сколько удовлетворено при частичном удовлетворении.
+                # Без поля диалог отвечал на вопрос «почему не вся сумма»
+                # текстом, а числа в нём не было.
+                "granted": (
+                    float(claim.granted_amount)
+                    if claim.granted_amount is not None
+                    else None
+                ),
             }
             for claim in money
         ],
         "other_claims": [
-            {"description": item.description, "basis": item.basis, "source": item.source}
+            {
+                "description": item.description,
+                "source": item.source,
+                "outcome": str(item.outcome.value),
+                "note": item.note,
+            }
             for item in others
         ],
         "counter_claims": [

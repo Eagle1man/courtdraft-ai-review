@@ -120,6 +120,59 @@ class TestOperativeIsNotModelGenerated:
         assert "operative" in RULES_BUILT_SECTIONS
 
 
+class TestBuiltByIsMarked:
+    """Разделы помечаются тем, кто их собрал.
+
+    Проверка «число отсутствует в материалах» написана для текста
+    модели: в разделах правил итог, копейки и пошлина — арифметика
+    проекта, и 8 CRITICAL на живом прогоне были именно ложными.
+    Пометка — единственное, что отличает текст модели от собственной
+    резолюции, и без теста она легко теряется.
+    """
+
+    @pytest.mark.asyncio
+    async def test_rules_section_marked(
+        self, pack: EvidencePack, template: dict[str, object]
+    ) -> None:
+        result = await generate_draft(pack, template, provider=WrongLLM())
+        assert result.sections[0].built_by == "rules"
+
+    @pytest.mark.asyncio
+    async def test_model_section_marked(self, pack: EvidencePack) -> None:
+        """Раздел не из списка правил остаётся модельным."""
+        template = {
+            "sections": [
+                {"key": "motivating", "name": "Мотивировочная часть",
+                 "purpose": "", "required_fields": []},
+            ]
+        }
+        result = await generate_draft(pack, template, provider=WrongLLM())
+        assert result.sections[0].built_by == "model"
+
+    @pytest.mark.asyncio
+    async def test_intro_and_objections_marked(self) -> None:
+        """Вводная и доводы ответчика — тоже разделы правил."""
+        pack = EvidencePack(case_number="5-1/2019", court_name="Суд")
+        pack.items.append(
+            EvidenceItem(
+                category="claims",
+                text="Истец требует взыскать задолженность 150000 рублей.",
+                source_document="исковое заявление.txt",
+                source_type="CLAIM",
+            )
+        )
+        template = {
+            "sections": [
+                {"key": "introductory", "name": "Вводная часть",
+                 "purpose": "", "required_fields": []},
+                {"key": "objections", "name": "Доводы ответчика",
+                 "purpose": "", "required_fields": []},
+            ]
+        }
+        result = await generate_draft(pack, template, provider=WrongLLM())
+        assert [s.built_by for s in result.sections] == ["rules", "rules"]
+
+
 class TestUnrecognisedClaimsAreVisible:
     @pytest.mark.asyncio
     async def test_unknown_requirement_mentioned_in_text(self) -> None:

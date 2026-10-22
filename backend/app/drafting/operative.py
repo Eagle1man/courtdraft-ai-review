@@ -303,6 +303,10 @@ class MoneyClaim:
     kopecks: int = 0
     #: При частичном удовлетворении — сколько удовлетворено.
     granted_amount: float | None = None
+    #: Копейки удовлетворённой части: 2 000 руб. 00 коп. у требования
+    #: на 7 000 руб. 50 коп. — не одно и то же, и копейки требования
+    #: к частичной сумме относить нельзя.
+    granted_kopecks: int = 0
     grounds: str = ""  # почему удовлетворено частично
     #: Что постановил суд. Поле обязательное: без него невозможно
     #: отразить отказ в удовлетворении, а именно этот случай система
@@ -512,7 +516,7 @@ def _satisfy(
         )
         granted_text = REVIEW
     else:
-        granted_text = _amount(claim.granted_amount, claim.kopecks)
+        granted_text = _amount(claim.granted_amount, claim.granted_kopecks)
 
     detail = f"; {claim.grounds}" if claim.grounds else ""
     reference = f"({claim.basis}{detail})"
@@ -676,7 +680,10 @@ def build_operative(
             claim.outcome is Outcome.PARTIAL
             and claim.granted_amount is not None
         ):
-            granted.append((claim.granted_amount, claim.kopecks))
+            # Копейки присуждённой суммы, а не копейки требования:
+            # при иске 7 000,50 и присуждении 2 000,25 итог иначе
+            # набирал бы 2 000,50 — пятьдесят копеек из чужого числа.
+            granted.append((claim.granted_amount, claim.granted_kopecks))
 
     # 2. Иные требования. Переменная названа иначе, чем в первом цикле:
     #    иначе вывод типа в mypy цепляется за MoneyClaim из первого
@@ -715,6 +722,17 @@ def build_operative(
     # 4. Распределение расходов. Пункт обязателен по ст. 98 ГПК РФ,
     #    поэтому отсутствие суммы не повод пропустить его целиком —
     #    повод оставить незаполненным и сказать об этом.
+    #
+    #    Частичное удовлетворение меняет саму форму пункта: ч. 1 ст. 98
+    #    ГПК РФ присуждает расходы ПРОПОРЦИОНАЛЬНО размеру
+    #    удовлетворённых требований. Раньше проект взыскивал пошлину
+    #    полной суммой (как при полном удовлетворении), и при отказе
+    #    в части иска пункт противоречил закону. Пропорцию не считает
+    #    ни система (число без материалов — выдумка) ни черновик: её
+    #    считает судья, поэтому сумма остаётся пометкой с пробелом.
+    proportional = any(
+        claim.outcome is not Outcome.SATISFIED for claim in money_claims
+    )
     if fee_stakes:
         if fee_paid is None:
             result.gaps.append(
@@ -754,23 +772,52 @@ def build_operative(
                         "государственная пошлина"
                     )
             else:
-                item = (
-                    f"Взыскать с {named.defendant_genitive} в пользу "
-                    f"{named.plaintiff_genitive} государственную пошлину "
-                    f"в размере {_amount(fee_paid)} (ст. 98 ГПК РФ)."
-                )
+                if proportional:
+                    item = (
+                        f"Взыскать с {named.defendant_genitive} в пользу "
+                        f"{named.plaintiff_genitive} государственную пошлину "
+                        f"пропорционально размеру удовлетворённых исковых "
+                        f"требований в размере {REVIEW} "
+                        f"(ч. 1 ст. 98 ГПК РФ)."
+                    )
+                    result.gaps.append(
+                        "исход по части требований не полный — размер "
+                        "госпошлины пропорционален удовлетворённой части "
+                        "и требует расчёта судьи"
+                    )
+                else:
+                    item = (
+                        f"Взыскать с {named.defendant_genitive} в пользу "
+                        f"{named.plaintiff_genitive} государственную пошлину "
+                        f"в размере {_amount(fee_paid)} (ст. 98 ГПК РФ)."
+                    )
             if costs is not None:
                 # Иные расходы (в отличие от пошлины) возвращаются
-                # истцу: он их понёс.
-                item += (
-                    f" Взыскать с {named.defendant_genitive} в пользу "
-                    f"{named.plaintiff_genitive} иные расходы в размере "
-                    f"{_amount(costs)} (ст. 100 ГПК РФ)."
-                )
+                # истцу: он их понёс. При частичном удовлетворении они
+                # тоже делятся пропорционально (ч. 1 ст. 98 ГПК РФ
+                # относит к расходам и иные издержки, понесённые
+                # стороной).
+                if proportional:
+                    item += (
+                        f" Взыскать с {named.defendant_genitive} в пользу "
+                        f"{named.plaintiff_genitive} иные расходы "
+                        f"пропорционально размеру удовлетворённых исковых "
+                        f"требований в размере {REVIEW} (ст. 100 ГПК РФ)."
+                    )
+                else:
+                    item += (
+                        f" Взыскать с {named.defendant_genitive} в пользу "
+                        f"{named.plaintiff_genitive} иные расходы в размере "
+                        f"{_amount(costs)} (ст. 100 ГПК РФ)."
+                    )
             result.items.append(item)
-            granted.append((fee_paid, 0))
-            if costs is not None:
-                granted.append((costs, 0))
+            # При пропорциональном распределении сумма расходов неизвестна
+            # и в итог «а всего» не входит: туда попадает только то, что
+            # взыскивается в определённом размере.
+            if not proportional:
+                granted.append((fee_paid, 0))
+                if costs is not None:
+                    granted.append((costs, 0))
 
     # Иные расходы по ст. 100 ГПК РФ не зависят от пошлины: их понёс
     # истец, и суд возвращает их независимо от того, известна ли
@@ -782,12 +829,25 @@ def build_operative(
     # расходов» — это касается и ст. 100, поэтому иные расходы под
     # флагом тоже не выводятся.
     if costs is not None and fee_stakes and not (fee_paid is not None):
-        result.items.append(
-            f"Взыскать с {named.defendant_genitive} в пользу "
-            f"{named.plaintiff_genitive} иные расходы в размере "
-            f"{_amount(costs)} (ст. 100 ГПК РФ)."
-        )
-        granted.append((costs, 0))
+        if proportional:
+            result.items.append(
+                f"Взыскать с {named.defendant_genitive} в пользу "
+                f"{named.plaintiff_genitive} иные расходы пропорционально "
+                f"размеру удовлетворённых исковых требований в размере "
+                f"{REVIEW} (ст. 100 ГПК РФ)."
+            )
+            result.gaps.append(
+                "исход по части требований не полный — размер иных "
+                "расходов пропорционален удовлетворённой части и "
+                "требует расчёта судьи"
+            )
+        else:
+            result.items.append(
+                f"Взыскать с {named.defendant_genitive} в пользу "
+                f"{named.plaintiff_genitive} иные расходы в размере "
+                f"{_amount(costs)} (ст. 100 ГПК РФ)."
+            )
+            granted.append((costs, 0))
 
     # 5. Итог «а всего». Так пишут в резолюции: одна цифра, из которой
     #    видно общий размер взыскания.

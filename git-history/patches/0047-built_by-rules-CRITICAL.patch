@@ -1,0 +1,613 @@
+From c5a2c9f38daff6773e0dff6877e88501aa34acb4 Mon Sep 17 00:00:00 2001
+From: Eagle1man <orel198611@gmail.com>
+Date: Thu, 22 Oct 2026 20:00:30 +0300
+Subject: [PATCH 47/49] =?UTF-8?q?=D0=9F=D1=80=D0=B0=D0=B2=D0=B8=D0=BB-?=
+ =?UTF-8?q?=D1=80=D0=B0=D0=B7=D0=B4=D0=B5=D0=BB=D1=8B=20=D0=BF=D0=BE=D0=BC?=
+ =?UTF-8?q?=D0=B5=D1=87=D0=B5=D0=BD=D1=8B=20built=5Fby:rules=20-=20=D0=BB?=
+ =?UTF-8?q?=D0=BE=D0=B6=D0=BD=D1=8B=D1=85=20CRITICAL=20=D0=BE=D1=82=20?=
+ =?UTF-8?q?=D0=BC=D0=BE=D0=B4=D0=B5=D0=BB=D0=B8=20=D0=B1=D0=BE=D0=BB=D1=8C?=
+ =?UTF-8?q?=D1=88=D0=B5=20=D0=BD=D0=B5=D1=82?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+---
+ backend/app/agents/draft_agent.py            |  14 +++
+ backend/app/drafting/section_quality.py      |  34 ++++++
+ backend/app/verification/engine.py           |  92 ++++++++------
+ backend/scripts/check_llm_live.py            | 121 +++++++++++++++++++
+ backend/scripts/demo.py                      |  15 ++-
+ backend/tests/test_draft_agent_operative.py  |  53 ++++++++
+ backend/tests/test_section_quality.py        |  38 ++++++
+ backend/tests/test_system_laws_and_totals.py |  69 ++++++++++-
+ 8 files changed, 400 insertions(+), 36 deletions(-)
+ create mode 100644 backend/scripts/check_llm_live.py
+
+diff --git a/backend/app/agents/draft_agent.py b/backend/app/agents/draft_agent.py
+index 9d3d0fa..2b278ca 100644
+--- a/backend/app/agents/draft_agent.py
++++ b/backend/app/agents/draft_agent.py
+@@ -64,6 +64,16 @@ class SectionDraft:
+     needs_review: bool = False
+     latency_ms: int = 0
+     error: str = ""
++    #: Кто собрал текст: "model" — языковая модель, "rules" — правила.
++    #:
++    #: Проверка «число отсутствует в материалах» написана для текста
++    #: модели и только он может содержать выдумку. В разделах, собранных
++    #: правилами, числа — собственная арифметика проекта (итог,
++    #: копейки, госпошлина): она не бывает в материалах в готовом виде
++    #: и проверяется отдельно (scripts/e2e_audit.py). Раньше различия
++    #: не было, и верификация помечала собственный итог резолюции
++    #: выдумкой модели — 8 CRITICAL на проекте без единой выдумки.
++    built_by: str = "model"
+ 
+ 
+ @dataclass
+@@ -403,6 +413,7 @@ def _build_operative_section(section: dict[str, Any], pack: EvidencePack) -> Sec
+         is_mock=False,
+         citations=citations,
+         needs_review=bool(result.gaps) or bool(unrecognised),
++        built_by="rules",
+     )
+ 
+ 
+@@ -458,6 +469,7 @@ def _build_intro_section(section: dict[str, Any], pack: EvidencePack) -> Section
+         # Реквизиты взяты из материалов, а не из заглушки модели.
+         is_mock=False,
+         needs_review=True,
++        built_by="rules",
+     )
+ 
+ 
+@@ -487,6 +499,7 @@ def _build_objections_section(
+                 f"{NEEDS_REVIEW}"
+             ),
+             needs_review=True,
++            built_by="rules",
+         )
+ 
+     paragraphs: list[str] = []
+@@ -508,6 +521,7 @@ def _build_objections_section(
+         # Цитаты собраны правилами из материалов дела, а не заглушкой.
+         is_mock=False,
+         citations=citations,
++        built_by="rules",
+     )
+ 
+ 
+diff --git a/backend/app/drafting/section_quality.py b/backend/app/drafting/section_quality.py
+index c11f7b0..01d5970 100644
+--- a/backend/app/drafting/section_quality.py
++++ b/backend/app/drafting/section_quality.py
+@@ -34,6 +34,35 @@ REASONING_MARKERS = (
+     "the key points are",
+ )
+ 
++#: Те же признаки, но для русской модели.
++#:
++#: Живой прогон (qvikhr, 22.10.2026): раздел «УСТАНОВИЛ» начался словами
++#: «Хорошо, давайте разберемся с этим делом. Начну с того, что в разделе
++#: "УСТАНОВИЛ" нужно описать выводы суда…» — модель описала работу вместо
++#: того, чтобы её сделать. Английских маркеров здесь нет ни одного, и
++#: проверка пропустила болтовню в проект решения.
++#:
++#: Формулировки выбраны так, чтобы не задевать судебный текст: фразы
++#: «взыскать», «удовлетворить», «исследовав доказательства» сюда не
++#: входят, а «давайте» встречается в решениях только в цитатах
++#: объяснений, где рядом нет слова «разберёмся».
++RUSSIAN_REASONING_MARKERS = (
++    "давайте разбер",
++    "давайте я ",
++    "начну с того",
++    "сначала напишу",
++    "я напишу",
++    "сейчас напишу",
++    "напишу раздел",
++    "мне нужно написать",
++    "нужно описать выводы",
++    "опишу ход",
++    "согласно инструкции",
++    "как указано в задании",
++    "рассмотрим этот раздел",
++    "выполним задание",
++)
++
+ #: Доля кириллицы среди букв, ниже которой текст не считается
+ #: русским. Порог низкий намеренно: в судебном тексте всегда есть
+ #: латиница — номера статей, «ООО», «руб.» — но рассуждение на
+@@ -71,6 +100,11 @@ def unusable_reason(text: str) -> str:
+             return (
+                 "модель описала ход своих рассуждений вместо текста раздела"
+             )
++    for marker in RUSSIAN_REASONING_MARKERS:
++        if marker in lowered:
++            return (
++                "модель описала ход своих рассуждений вместо текста раздела"
++            )
+ 
+     # Ключ сравнения нормализуется: без этого повтор, отличающийся
+     # одним знаком препинания, считался новой фразой, и зацикливание
+diff --git a/backend/app/verification/engine.py b/backend/app/verification/engine.py
+index 4501c0a..e2fa323 100644
+--- a/backend/app/verification/engine.py
++++ b/backend/app/verification/engine.py
+@@ -35,7 +35,7 @@ from app.verification.evidence_assessment import (
+ )
+ from app.verification.jurisdiction import check_jurisdiction
+ from app.verification.laws import LawRegistry, extract_fee, fee_matches, state_fee
+-from app.verification.persons import check_section
++from app.verification.persons import PersonFinding, RoleFinding, check_section
+ from app.verification.qualification import check_qualification
+ from app.verification.subject_of_proof import ProofFact, subject_of_proof
+ 
+@@ -543,8 +543,20 @@ def verify_draft(
+         # «выдуманное число».
+         law_numbers = {article for article, _ in _laws_in(text)}
+ 
++        # ── Разделы, собранные правилами, а не моделью ────────────
++        #
++        # Проверки 1, 3 и 6 написаны для текста модели: выдуманное
++        # число, выдуманная персона и отсутствие источника — это
++        # признаки именно модели. В разделах, собранных правилами,
++        # итог «а всего», копейки и госпошлина — арифметика проекта,
++        # которой в материалах в готовом виде быть не может, а
++        # «Именем Российской Федерации» — установленная форма, а не
++        # персона. На живом прогоне это давало 8 CRITICAL на проекте
++        # без единой выдумки, и настоящие тревоги тонули в ложных.
++        by_rules = section.built_by == "rules"
++
+         # ── 1. Раздел без единой ссылки на источник ────────────────
+-        if not section.citations and not pack.by_category(section.key):
++        if not by_rules and not section.citations and not pack.by_category(section.key):
+             report.issues.append(
+                 Issue(
+                     type=IssueType.MISSING_SOURCE,
+@@ -571,38 +583,44 @@ def verify_draft(
+             )
+ 
+         # ── 3. Числа, которых нет в материалах (главная проверка) ──
+-        found_numbers = _numbers_in(text)
+-        # Числа, которые опираются на материалы дела. Сумма из них —
+-        # не выдумка, а арифметика проекта: «а всего» в резолюции
+-        # считается системой из уже подтверждённых сумм, и её не может
+-        # быть в материалах в готовом виде.
+-        backed = {
+-            int(number)
+-            for number in found_numbers
+-            if number in material_numbers
+-        }
+-        invented = {
+-            number
+-            for number in found_numbers
+-            if number not in material_numbers
+-            and number not in small_numbers
+-            and number not in law_numbers
+-            and not _is_sum_of(number, backed)
+-        }
+-        for number in sorted(invented):
+-            report.unsupported_claims += 1
+-            report.issues.append(
+-                Issue(
+-                    type=IssueType.UNSUPPORTED_CLAIM,
+-                    severity=Severity.CRITICAL,
+-                    text=text[:200],
+-                    reason=(
+-                        f"число {number} отсутствует в материалах дела — "
+-                        "возможна выдумка модели"
+-                    ),
+-                    section=section.name,
++        if by_rules:
++            # Числа раздела собраны из материалов правилами: сверка
++            # их арифметики — работа scripts/e2e_audit.py, а не
++            # проверки «на выдумку модели».
++            pass
++        else:
++            found_numbers = _numbers_in(text)
++            # Числа, которые опираются на материалы дела. Сумма из них —
++            # не выдумка, а арифметика проекта: «а всего» в резолюции
++            # считается системой из уже подтверждённых сумм, и её не может
++            # быть в материалах в готовом виде.
++            backed = {
++                int(number)
++                for number in found_numbers
++                if number in material_numbers
++            }
++            invented = {
++                number
++                for number in found_numbers
++                if number not in material_numbers
++                and number not in small_numbers
++                and number not in law_numbers
++                and not _is_sum_of(number, backed)
++            }
++            for number in sorted(invented):
++                report.unsupported_claims += 1
++                report.issues.append(
++                    Issue(
++                        type=IssueType.UNSUPPORTED_CLAIM,
++                        severity=Severity.CRITICAL,
++                        text=text[:200],
++                        reason=(
++                            f"число {number} отсутствует в материалах дела — "
++                            "возможна выдумка модели"
++                        ),
++                        section=section.name,
++                    )
+                 )
+-            )
+ 
+         # ── 4. Ссылки на нормы без подтверждения ───────────────────
+         for article, code in _laws_in(text):
+@@ -675,7 +693,13 @@ def verify_draft(
+             )
+ 
+         # ── 6. Персоны, которых нет в материалах дела ─────────────
+-        persons, roles = check_section(text, section.name, pack)
++        # В правилах-разделах формульные слова («Именем Российской
++        # Федерации») за персону не считаются — см. пояснение к by_rules.
++        if by_rules:
++            persons: list[PersonFinding] = []
++            roles: list[RoleFinding] = []
++        else:
++            persons, roles = check_section(text, section.name, pack)
+ 
+         for finding in persons:
+             report.unsupported_claims += 1
+diff --git a/backend/scripts/check_llm_live.py b/backend/scripts/check_llm_live.py
+new file mode 100644
+index 0000000..690dda9
+--- /dev/null
++++ b/backend/scripts/check_llm_live.py
+@@ -0,0 +1,121 @@
++"""Проверить локальную модель на живом вызове: здоровье, текст, JSON.
++
++Отличие от scripts/check_ollama.py: тот только перечисляет реестр моделей,
++а этот генерирует настоящий ответ провайдером приложения — ровно так, как
++его вызывает конвейер. Именно такая проверка нужна перед демонстрацией:
++модель может стоять в реестре и при этом не отвечать на запрос формата,
++который ждёт агент.
++
++Отчёт пишется в UTF-8-файл: консоль Windows портит кириллицу.
++
++Запуск:
++    .venv\\Scripts\\python.exe -X utf8 scripts\\check_llm_live.py
++    .venv\\Scripts\\python.exe -X utf8 scripts\\check_llm_live.py --quick
++"""
++
++from __future__ import annotations
++
++import argparse
++import asyncio
++import sys
++from pathlib import Path
++
++BACKEND = Path(__file__).resolve().parent.parent
++sys.path.insert(0, str(BACKEND))
++
++from app.llm import build_llm_provider  # noqa: E402
++from app.llm.base import LLMMessage, LLMRequest  # noqa: E402
++
++OUT = Path(r"C:\Users\diorl\AppData\Local\Temp\opencode\llm_live_check.txt")
++
++
++async def run(quick: bool) -> tuple[list[str], int]:
++    """Собрать результат проверки. Запись файла — в main, синхронно."""
++    lines: list[str] = []
++    provider = build_llm_provider()
++    lines.append(f"провайдер: {provider.name}")
++    lines.append(f"модель: {getattr(provider, '_model', '—')}")
++
++    if not await provider.health():
++        lines.append("ЗДОРОВЬЕ: НЕТ — Ollama недоступна или модели нет в реестре")
++        return lines, 1
++    lines.append("ЗДОРОВЬЕ: да")
++
++    # 1. Обычный текст: тот же вызов, что делает агент для раздела.
++    request = LLMRequest(
++        messages=[
++            LLMMessage(
++                role="system",
++                content="Ты — помощник судьи. Отвечай кратко и по существу.",
++            ),
++            LLMMessage(
++                role="user",
++                content=(
++                    "Напиши раздел «Мотивы принятия решения» решения суда. "
++                    "Дело № А-123. Истец просит взыскать 5 000 руб. по договору "
++                    "поставки. Материалы дела: договор поставки, расписка о "
++                    "получении 5 000 руб."
++                ),
++            ),
++        ],
++        temperature=0.1,
++        max_tokens=200,
++    )
++    response = await provider.generate(request)
++    lines.append("")
++    lines.append("— текст —")
++    lines.append(
++        f"модель: {response.model} · is_mock={response.is_mock} · "
++        f"{response.latency_ms / 1000:.1f} с · "
++        f"токенов: {response.usage.prompt_tokens}+{response.usage.completion_tokens}"
++    )
++    lines.append(response.text.strip()[:800])
++
++    if quick:
++        lines.append("")
++        lines.append("(JSON-проверка пропущена: --quick)")
++        return lines, 0
++
++    # 2. JSON-режим: агенты разведки просят структурированный ответ.
++    #    Проверяется именно он, потому что модель, дающая красивый текст,
++    #    часто не умеет отдавать валидный JSON — и агент получает default.
++    json_request = LLMRequest(
++        messages=[
++            LLMMessage(
++                role="system",
++                content=(
++                    "Отвечай ТОЛЬКО валидным JSON вида "
++                    '{"court": "...", "sum": "..."}'
++                ),
++            ),
++            LLMMessage(
++                role="user",
++                content="Суд: районный суд. Сумма иска: 5 000 руб.",
++            ),
++        ],
++        temperature=0.0,
++        max_tokens=120,
++        json_mode=True,
++    )
++    parsed = await provider.generate_json(json_request, default={"error": "не разобран"})
++    lines.append("")
++    lines.append("— JSON —")
++    lines.append(str(parsed)[:400])
++
++    return lines, 0
++
++
++def main() -> int:
++    parser = argparse.ArgumentParser(description="Живая проверка модели")
++    parser.add_argument(
++        "--quick", action="store_true", help="только текст, без JSON-проверки"
++    )
++    args = parser.parse_args()
++    lines, code = asyncio.run(run(args.quick))
++    OUT.write_text("\n".join(lines), encoding="utf-8")
++    print(f"записано: {OUT}")
++    return code
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
+diff --git a/backend/scripts/demo.py b/backend/scripts/demo.py
+index 735307f..f9276b4 100644
+--- a/backend/scripts/demo.py
++++ b/backend/scripts/demo.py
+@@ -235,11 +235,24 @@ def collect_rules(pack: EvidencePack) -> dict:
+                 "basis": claim.basis,
+                 "source": claim.source,
+                 "outcome": str(claim.outcome.value),
++                # Сколько удовлетворено при частичном удовлетворении.
++                # Без поля диалог отвечал на вопрос «почему не вся сумма»
++                # текстом, а числа в нём не было.
++                "granted": (
++                    float(claim.granted_amount)
++                    if claim.granted_amount is not None
++                    else None
++                ),
+             }
+             for claim in money
+         ],
+         "other_claims": [
+-            {"description": item.description, "basis": item.basis, "source": item.source}
++            {
++                "description": item.description,
++                "source": item.source,
++                "outcome": str(item.outcome.value),
++                "note": item.note,
++            }
+             for item in others
+         ],
+         "counter_claims": [
+diff --git a/backend/tests/test_draft_agent_operative.py b/backend/tests/test_draft_agent_operative.py
+index df9a994..2a8e7f8 100644
+--- a/backend/tests/test_draft_agent_operative.py
++++ b/backend/tests/test_draft_agent_operative.py
+@@ -120,6 +120,59 @@ class TestOperativeIsNotModelGenerated:
+         assert "operative" in RULES_BUILT_SECTIONS
+ 
+ 
++class TestBuiltByIsMarked:
++    """Разделы помечаются тем, кто их собрал.
++
++    Проверка «число отсутствует в материалах» написана для текста
++    модели: в разделах правил итог, копейки и пошлина — арифметика
++    проекта, и 8 CRITICAL на живом прогоне были именно ложными.
++    Пометка — единственное, что отличает текст модели от собственной
++    резолюции, и без теста она легко теряется.
++    """
++
++    @pytest.mark.asyncio
++    async def test_rules_section_marked(
++        self, pack: EvidencePack, template: dict[str, object]
++    ) -> None:
++        result = await generate_draft(pack, template, provider=WrongLLM())
++        assert result.sections[0].built_by == "rules"
++
++    @pytest.mark.asyncio
++    async def test_model_section_marked(self, pack: EvidencePack) -> None:
++        """Раздел не из списка правил остаётся модельным."""
++        template = {
++            "sections": [
++                {"key": "motivating", "name": "Мотивировочная часть",
++                 "purpose": "", "required_fields": []},
++            ]
++        }
++        result = await generate_draft(pack, template, provider=WrongLLM())
++        assert result.sections[0].built_by == "model"
++
++    @pytest.mark.asyncio
++    async def test_intro_and_objections_marked(self) -> None:
++        """Вводная и доводы ответчика — тоже разделы правил."""
++        pack = EvidencePack(case_number="5-1/2019", court_name="Суд")
++        pack.items.append(
++            EvidenceItem(
++                category="claims",
++                text="Истец требует взыскать задолженность 150000 рублей.",
++                source_document="исковое заявление.txt",
++                source_type="CLAIM",
++            )
++        )
++        template = {
++            "sections": [
++                {"key": "introductory", "name": "Вводная часть",
++                 "purpose": "", "required_fields": []},
++                {"key": "objections", "name": "Доводы ответчика",
++                 "purpose": "", "required_fields": []},
++            ]
++        }
++        result = await generate_draft(pack, template, provider=WrongLLM())
++        assert [s.built_by for s in result.sections] == ["rules", "rules"]
++
++
+ class TestUnrecognisedClaimsAreVisible:
+     @pytest.mark.asyncio
+     async def test_unknown_requirement_mentioned_in_text(self) -> None:
+diff --git a/backend/tests/test_section_quality.py b/backend/tests/test_section_quality.py
+index 11704ce..a765ed4 100644
+--- a/backend/tests/test_section_quality.py
++++ b/backend/tests/test_section_quality.py
+@@ -106,3 +106,41 @@ class TestGoodTextAccepted:
+     )
+     def test_usable(self, text: str) -> None:
+         assert unusable_reason(text) == ""
++
++
++class TestRussianChatterRejected:
++    """Живой прогон 22.10.2026: qvikhr в разделе «УСТАНОВИЛ».
++
++    Модель начала не с текста раздела, а с описания своей работы:
++    «Хорошо, давайте разберемся с этим делом. Начну с того, что в
++    разделе "УСТАНОВИЛ" нужно описать выводы суда…». Английских
++    маркеров в этой фразе нет ни одного, и раньше болтовня уходила в
++    проект решения целиком.
++    """
++
++    CHATTER = (
++        "Хорошо, давайте разберемся с этим делом. Начну с того, что "
++        "в разделе \"УСТАНОВИЛ\" нужно описать выводы суда по "
++        "требованиям, ссылаясь на нормы закона."
++    )
++
++    def test_chatter_is_not_usable(self) -> None:
++        assert unusable_reason(self.CHATTER) != ""
++
++    def test_reason_names_reasoning(self) -> None:
++        reason = unusable_reason(self.CHATTER)
++        assert "рассужден" in reason or "описала ход" in reason
++
++    @pytest.mark.parametrize(
++        "text",
++        [
++            # Формулировка суда с «удовлетворению» не должна ловиться.
++            "Суд считает иск подлежащим удовлетворению частично.",
++            # «Инструкция» в цитате — не признак болтовни.
++            "Ответчик ссылался на инструкцию по эксплуатации "
++            "и просил отказать в иске.",
++            RUSSIAN,
++        ],
++    )
++    def test_legal_text_is_not_chatter(self, text: str) -> None:
++        assert unusable_reason(text) == ""
+diff --git a/backend/tests/test_system_laws_and_totals.py b/backend/tests/test_system_laws_and_totals.py
+index b6f5a7d..6377cdd 100644
+--- a/backend/tests/test_system_laws_and_totals.py
++++ b/backend/tests/test_system_laws_and_totals.py
+@@ -23,7 +23,7 @@ from __future__ import annotations
+ 
+ from app.agents.draft_agent import DraftResult, SectionDraft
+ from app.agents.evidence_pack import EvidenceItem, EvidencePack
+-from app.verification.engine import Severity, verify_draft
++from app.verification.engine import Severity, VerificationReport, verify_draft
+ 
+ OPERATIVE = (
+     "Руководствуясь ст. 198 ГПК РФ, суд решил:\n"
+@@ -89,6 +89,73 @@ class TestOperativeIsNotAccused:
+         assert flagged == [], flagged
+ 
+ 
++class TestRulesBuiltSectionsNotAccused:
++    """Разделы правил не обвиняются в выдумке модели.
++
++    Живой прогон 22.10.2026 (real-04): итог резолюции 32 692 руб.
++    60 коп. — сумма четырёх требований плюс иные расходы, копейки
++    перенесены из требований. Такого числа в материалах в готовом
++    виде быть не может, и проверка помечала его выдумкой модели:
++    8 CRITICAL на проекте без единой выдумки, а настоящие тревоги в
++    этом шуме не видно.
++    """
++
++    TOTAL_SECTION = (
++        "Руководствуясь ст. 198 ГПК РФ, суд решил:\n"
++        "1. Удовлетворить исковые требования истца в полном объёме: "
++        "взыскать с Ответчик в пользу Истец 10 490 руб. 00 коп. "
++        "(ущерб, 01_claim.txt).\n"
++        "2. Взыскать 32 692 руб. 60 коп. всего (итог проекта)."
++    )
++
++    def _report_with(self, *, rules: bool) -> VerificationReport:
++        pack = EvidencePack(
++            items=[
++                EvidenceItem(
++                    category="claims",
++                    text=(
++                        "Прошу взыскать 10 490 руб. и 2 202 руб. 90 коп. "
++                        "и 10 000 руб. и 7 000 руб."
++                    ),
++                    source_document="01_claim.txt",
++                    source_type="иск",
++                    amounts=["10490", "2202", "10000", "7000"],
++                    order=1,
++                )
++            ],
++            amounts=["10490", "2202", "10000", "7000"],
++        )
++        section = SectionDraft(
++            key="operative",
++            name="РЕШИЛ",
++            text=self.TOTAL_SECTION,
++            is_mock=False,
++            citations=["01_claim.txt"],
++            **({"built_by": "rules"} if rules else {}),
++        )
++        return verify_draft(
++            DraftResult(case_number="X", provider="test", sections=[section]),
++            pack,
++        )
++
++    def test_rules_total_not_accused(self) -> None:
++        critical = [
++            i.reason
++            for i in self._report_with(rules=True).issues
++            if i.severity is Severity.CRITICAL
++        ]
++        assert critical == [], critical
++
++    def test_model_total_still_accused(self) -> None:
++        """Ослабления для модели нет: та же фраза от модели — тревога."""
++        critical = [
++            i.reason
++            for i in self._report_with(rules=False).issues
++            if i.severity is Severity.CRITICAL
++        ]
++        assert critical, "выдуманное число пропущено"
++
++
+ class TestExemptionsAreNarrow:
+     def test_law_from_nothing_still_flagged(self) -> None:
+         """Норму, которой нет нигде, по-прежнему ловим.
+-- 
+2.53.0.windows.2
+

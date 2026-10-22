@@ -107,6 +107,16 @@ class EvidencePack:
     amounts: list[str] = field(default_factory=list)
     dates: list[str] = field(default_factory=list)
     gaps: list[str] = field(default_factory=list)
+    #: Полные тексты документов дела: имя файла -> текст.
+    #:
+    #: items хранит только размеченные фразы — по делу real-06 это
+    #: 1 241 символ из 4 255. Для исхода требований нужны сплошные
+    #: предложения установительной части («исков подлежит удовлетворению
+    #: частично», «взыскивает моральный вред в сумме 2000 рублей»), и в
+    #: размеченных фразах их может не быть вовсе: классификатор оставляет
+    #: по одному признаку на фразу. Читать исход с диска в черновике
+    #: нельзя — там только то, что вошло в пакет.
+    documents: dict[str, str] = field(default_factory=dict)
 
     def by_category(self, category: str) -> list[EvidenceItem]:
         return [item for item in self.items if item.category == category]
@@ -315,6 +325,10 @@ def build_evidence_pack(
         text = document.text or ""
         if not text.strip():
             continue
+
+        # Сплошной текст документа — для проверок, которым нужны
+        # предложения целиком (исход требований: resolve_outcomes).
+        pack.documents[document.filename] = text
 
         for amount in extract_money(text):
             if amount not in all_amounts:

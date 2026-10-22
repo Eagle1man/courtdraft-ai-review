@@ -106,3 +106,41 @@ class TestGoodTextAccepted:
     )
     def test_usable(self, text: str) -> None:
         assert unusable_reason(text) == ""
+
+
+class TestRussianChatterRejected:
+    """Живой прогон 22.10.2026: qvikhr в разделе «УСТАНОВИЛ».
+
+    Модель начала не с текста раздела, а с описания своей работы:
+    «Хорошо, давайте разберемся с этим делом. Начну с того, что в
+    разделе "УСТАНОВИЛ" нужно описать выводы суда…». Английских
+    маркеров в этой фразе нет ни одного, и раньше болтовня уходила в
+    проект решения целиком.
+    """
+
+    CHATTER = (
+        "Хорошо, давайте разберемся с этим делом. Начну с того, что "
+        "в разделе \"УСТАНОВИЛ\" нужно описать выводы суда по "
+        "требованиям, ссылаясь на нормы закона."
+    )
+
+    def test_chatter_is_not_usable(self) -> None:
+        assert unusable_reason(self.CHATTER) != ""
+
+    def test_reason_names_reasoning(self) -> None:
+        reason = unusable_reason(self.CHATTER)
+        assert "рассужден" in reason or "описала ход" in reason
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            # Формулировка суда с «удовлетворению» не должна ловиться.
+            "Суд считает иск подлежащим удовлетворению частично.",
+            # «Инструкция» в цитате — не признак болтовни.
+            "Ответчик ссылался на инструкцию по эксплуатации "
+            "и просил отказать в иске.",
+            RUSSIAN,
+        ],
+    )
+    def test_legal_text_is_not_chatter(self, text: str) -> None:
+        assert unusable_reason(text) == ""

@@ -1,0 +1,1084 @@
+From 792d61184a8a3eac5d8186c046d6b9b26a119e6f Mon Sep 17 00:00:00 2001
+From: Eagle1man <orel198611@gmail.com>
+Date: Thu, 22 Oct 2026 20:00:31 +0300
+Subject: [PATCH 48/49] =?UTF-8?q?=D0=98=D1=81=D1=85=D0=BE=D0=B4=20=D1=82?=
+ =?UTF-8?q?=D1=80=D0=B5=D0=B1=D0=BE=D0=B2=D0=B0=D0=BD=D0=B8=D1=8F=20=D0=B8?=
+ =?UTF-8?q?=D0=B7=20=D1=83=D1=81=D1=82=D0=B0=D0=BD=D0=BE=D0=B2=D0=B8=D1=82?=
+ =?UTF-8?q?=D0=B5=D0=BB=D1=8C=D0=BD=D0=BE=D0=B9=20=D1=87=D0=B0=D1=81=D1=82?=
+ =?UTF-8?q?=D0=B8,=20=D0=B4=D0=BE=D0=BB=D1=8F=201/3=20=D0=B8=20=D0=BF?=
+ =?UTF-8?q?=D1=80=D0=BE=D0=BF=D0=BE=D1=80=D1=86=D0=B8=D1=8F=20=D1=81=D1=82?=
+ =?UTF-8?q?.98=20=D0=93=D0=9F=D0=9A?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+---
+ backend/app/agents/claim_phrases.py       |  70 ++++++
+ backend/app/agents/evidence_pack.py       |  14 ++
+ backend/app/drafting/operative.py         | 104 +++++++--
+ backend/app/drafting/requirements.py      | 257 +++++++++++++++++++++-
+ backend/tests/test_outcomes.py            | 210 ++++++++++++++++++
+ backend/tests/test_real_rules.py          |  27 ++-
+ backend/tests/test_share_and_utilities.py | 130 +++++++++++
+ scripts/build_real_site.py                |   8 +
+ scripts/e2e_audit.py                      |  40 ++--
+ 9 files changed, 819 insertions(+), 41 deletions(-)
+ create mode 100644 backend/tests/test_outcomes.py
+ create mode 100644 backend/tests/test_share_and_utilities.py
+
+diff --git a/backend/app/agents/claim_phrases.py b/backend/app/agents/claim_phrases.py
+index 84cd5ce..e1cc91e 100644
+--- a/backend/app/agents/claim_phrases.py
++++ b/backend/app/agents/claim_phrases.py
+@@ -170,6 +170,32 @@ CLAIM_BASIS_PATTERNS: list[tuple[re.Pattern[str], str]] = [
+         ),
+         "убытки",
+     ),
++    (
++        # Узкие формы — перед общей «задолженность по договору» (порядок
++        # решает, как и в CLAIM_BASIS_ANCHORS ниже): real-01 уточнение
++        # «задолженность по оплате за ремонт и содержание жилья» давало
++        # общий якорь, и пункт слипался с ЖКУ 11 107,84.
++        #
++        # Разбор по пунктам режет окно по «и» и запятым, поэтому после
++        # «задолженность ...» ждётся одно слово из пары «ремонт /
++        # содержание», а не вся пара: фраза «ремонт и содержание»
++        # после разреза доходит куском «задолженность ... за ремонт».
++        re.compile(
++            r"(?:взыска\w+|возмести\w*)\s+" + _BETWEEN
++            + r"задолженност\w*[^.]{0,80}?(?:ремонт|содержани)\w*",
++            re.I,
++        ),
++        "задолженность за ремонт и содержание жилья",
++    ),
++    (
++        re.compile(
++            r"(?:взыска\w+|возмести\w*)\s+" + _BETWEEN
++            + r"задолженност\w*[^.]{0,80}?"
++            r"(?:жилищно-коммунальн\w*|коммунальн\w*\s+услуг)",
++            re.I,
++        ),
++        "задолженность за жилищно-коммунальные услуги",
++    ),
+     (
+         re.compile(
+             r"(?:взыска\w+|возмести\w*)\s+" + _BETWEEN
+@@ -190,6 +216,15 @@ CLAIM_BASIS_PATTERNS: list[tuple[re.Pattern[str], str]] = [
+         ),
+         "возмещение стоимости имущества",
+     ),
++    (
++        re.compile(
++            r"(?:товар\w*|телефон\w*|имуществ\w*|вещ\w*|комплект\w*|"
++            r"автомобил\w*|жиль[ея]\w*|квартир\w*|участк\w*)"
++            r"\s+стоимост\w+\s+(?:[\d\s.,]{3,})",
++            re.I,
++        ),
++        "возмещение стоимости имущества",
++    ),
+     (
+         re.compile(
+             r"признать\s+" + _BETWEEN
+@@ -272,6 +307,28 @@ CLAIM_BASIS_ANCHORS: list[tuple[re.Pattern[str], str]] = [
+         re.compile(r"убытк\w*|реальный\s+ущерб|ущерб", re.I),
+         "убытки",
+     ),
++    # Узкие якоря стоят ПЕРЕД общим «задолженность по договору»: в
++    # якорях побеждает первое совпадение. В real-01 «задолженность
++    # за жилищно-коммунальные услуги 11 107,84» и уточнение «задолженность
++    # по оплате за ремонт и содержание жилья 7 919,17» схлопывались
++    # в одно основание, и проект требовал выбрать одну из двух сумм
++    # вместо двух пунктов. Суд в итоге отказал по ремонту и взыскал
++    # ЖКУ — но это решение судья принимает сам, а не схлопка в один пункт.
++    (
++        re.compile(
++            r"задолженност\w*[^.]{0,80}?(?:ремонт|содержани)\w*",
++            re.I,
++        ),
++        "задолженность за ремонт и содержание жилья",
++    ),
++    (
++        re.compile(
++            r"задолженност\w*[^.]{0,80}?"
++            r"(?:жилищно-коммунальн\w*|коммунальн\w*\s+услуг)",
++            re.I,
++        ),
++        "задолженность за жилищно-коммунальные услуги",
++    ),
+     (
+         re.compile(r"задолженност\w*|долг", re.I),
+         "задолженность по договору",
+@@ -284,6 +341,19 @@ CLAIM_BASIS_ANCHORS: list[tuple[re.Pattern[str], str]] = [
+         ),
+         "возмещение стоимости имущества",
+     ),
++    # Та же основа, но в форме, которой суд пишет в мотивировочной
++    # части: «телефон стоимостью 6890 рублей», «автомобиль стоимостью
++    # 300 000 руб.». Без этой формы исход по требованию о стоимости
++    # имущества в установительной части не определялся вовсе.
++    (
++        re.compile(
++            r"(?:товар\w*|телефон\w*|имуществ\w*|вещ\w*|комплект\w*|"
++            r"автомобил\w*|жиль[ея]\w*|квартир\w*|участк\w*)"
++            r"\s+стоимост\w+\s+(?:[\d\s.,]{3,})",
++            re.I,
++        ),
++        "возмещение стоимости имущества",
++    ),
+ ]
+ 
+ # Основания без денежной суммы.
+diff --git a/backend/app/agents/evidence_pack.py b/backend/app/agents/evidence_pack.py
+index 0f78c2c..c440921 100644
+--- a/backend/app/agents/evidence_pack.py
++++ b/backend/app/agents/evidence_pack.py
+@@ -107,6 +107,16 @@ class EvidencePack:
+     amounts: list[str] = field(default_factory=list)
+     dates: list[str] = field(default_factory=list)
+     gaps: list[str] = field(default_factory=list)
++    #: Полные тексты документов дела: имя файла -> текст.
++    #:
++    #: items хранит только размеченные фразы — по делу real-06 это
++    #: 1 241 символ из 4 255. Для исхода требований нужны сплошные
++    #: предложения установительной части («исков подлежит удовлетворению
++    #: частично», «взыскивает моральный вред в сумме 2000 рублей»), и в
++    #: размеченных фразах их может не быть вовсе: классификатор оставляет
++    #: по одному признаку на фразу. Читать исход с диска в черновике
++    #: нельзя — там только то, что вошло в пакет.
++    documents: dict[str, str] = field(default_factory=dict)
+ 
+     def by_category(self, category: str) -> list[EvidenceItem]:
+         return [item for item in self.items if item.category == category]
+@@ -316,6 +326,10 @@ def build_evidence_pack(
+         if not text.strip():
+             continue
+ 
++        # Сплошной текст документа — для проверок, которым нужны
++        # предложения целиком (исход требований: resolve_outcomes).
++        pack.documents[document.filename] = text
++
+         for amount in extract_money(text):
+             if amount not in all_amounts:
+                 all_amounts.append(amount)
+diff --git a/backend/app/drafting/operative.py b/backend/app/drafting/operative.py
+index 9a19b3a..b634d33 100644
+--- a/backend/app/drafting/operative.py
++++ b/backend/app/drafting/operative.py
+@@ -303,6 +303,10 @@ class MoneyClaim:
+     kopecks: int = 0
+     #: При частичном удовлетворении — сколько удовлетворено.
+     granted_amount: float | None = None
++    #: Копейки удовлетворённой части: 2 000 руб. 00 коп. у требования
++    #: на 7 000 руб. 50 коп. — не одно и то же, и копейки требования
++    #: к частичной сумме относить нельзя.
++    granted_kopecks: int = 0
+     grounds: str = ""  # почему удовлетворено частично
+     #: Что постановил суд. Поле обязательное: без него невозможно
+     #: отразить отказ в удовлетворении, а именно этот случай система
+@@ -512,7 +516,7 @@ def _satisfy(
+         )
+         granted_text = REVIEW
+     else:
+-        granted_text = _amount(claim.granted_amount, claim.kopecks)
++        granted_text = _amount(claim.granted_amount, claim.granted_kopecks)
+ 
+     detail = f"; {claim.grounds}" if claim.grounds else ""
+     reference = f"({claim.basis}{detail})"
+@@ -676,7 +680,10 @@ def build_operative(
+             claim.outcome is Outcome.PARTIAL
+             and claim.granted_amount is not None
+         ):
+-            granted.append((claim.granted_amount, claim.kopecks))
++            # Копейки присуждённой суммы, а не копейки требования:
++            # при иске 7 000,50 и присуждении 2 000,25 итог иначе
++            # набирал бы 2 000,50 — пятьдесят копеек из чужого числа.
++            granted.append((claim.granted_amount, claim.granted_kopecks))
+ 
+     # 2. Иные требования. Переменная названа иначе, чем в первом цикле:
+     #    иначе вывод типа в mypy цепляется за MoneyClaim из первого
+@@ -715,6 +722,17 @@ def build_operative(
+     # 4. Распределение расходов. Пункт обязателен по ст. 98 ГПК РФ,
+     #    поэтому отсутствие суммы не повод пропустить его целиком —
+     #    повод оставить незаполненным и сказать об этом.
++    #
++    #    Частичное удовлетворение меняет саму форму пункта: ч. 1 ст. 98
++    #    ГПК РФ присуждает расходы ПРОПОРЦИОНАЛЬНО размеру
++    #    удовлетворённых требований. Раньше проект взыскивал пошлину
++    #    полной суммой (как при полном удовлетворении), и при отказе
++    #    в части иска пункт противоречил закону. Пропорцию не считает
++    #    ни система (число без материалов — выдумка) ни черновик: её
++    #    считает судья, поэтому сумма остаётся пометкой с пробелом.
++    proportional = any(
++        claim.outcome is not Outcome.SATISFIED for claim in money_claims
++    )
+     if fee_stakes:
+         if fee_paid is None:
+             result.gaps.append(
+@@ -754,23 +772,52 @@ def build_operative(
+                         "государственная пошлина"
+                     )
+             else:
+-                item = (
+-                    f"Взыскать с {named.defendant_genitive} в пользу "
+-                    f"{named.plaintiff_genitive} государственную пошлину "
+-                    f"в размере {_amount(fee_paid)} (ст. 98 ГПК РФ)."
+-                )
++                if proportional:
++                    item = (
++                        f"Взыскать с {named.defendant_genitive} в пользу "
++                        f"{named.plaintiff_genitive} государственную пошлину "
++                        f"пропорционально размеру удовлетворённых исковых "
++                        f"требований в размере {REVIEW} "
++                        f"(ч. 1 ст. 98 ГПК РФ)."
++                    )
++                    result.gaps.append(
++                        "исход по части требований не полный — размер "
++                        "госпошлины пропорционален удовлетворённой части "
++                        "и требует расчёта судьи"
++                    )
++                else:
++                    item = (
++                        f"Взыскать с {named.defendant_genitive} в пользу "
++                        f"{named.plaintiff_genitive} государственную пошлину "
++                        f"в размере {_amount(fee_paid)} (ст. 98 ГПК РФ)."
++                    )
+             if costs is not None:
+                 # Иные расходы (в отличие от пошлины) возвращаются
+-                # истцу: он их понёс.
+-                item += (
+-                    f" Взыскать с {named.defendant_genitive} в пользу "
+-                    f"{named.plaintiff_genitive} иные расходы в размере "
+-                    f"{_amount(costs)} (ст. 100 ГПК РФ)."
+-                )
++                # истцу: он их понёс. При частичном удовлетворении они
++                # тоже делятся пропорционально (ч. 1 ст. 98 ГПК РФ
++                # относит к расходам и иные издержки, понесённые
++                # стороной).
++                if proportional:
++                    item += (
++                        f" Взыскать с {named.defendant_genitive} в пользу "
++                        f"{named.plaintiff_genitive} иные расходы "
++                        f"пропорционально размеру удовлетворённых исковых "
++                        f"требований в размере {REVIEW} (ст. 100 ГПК РФ)."
++                    )
++                else:
++                    item += (
++                        f" Взыскать с {named.defendant_genitive} в пользу "
++                        f"{named.plaintiff_genitive} иные расходы в размере "
++                        f"{_amount(costs)} (ст. 100 ГПК РФ)."
++                    )
+             result.items.append(item)
+-            granted.append((fee_paid, 0))
+-            if costs is not None:
+-                granted.append((costs, 0))
++            # При пропорциональном распределении сумма расходов неизвестна
++            # и в итог «а всего» не входит: туда попадает только то, что
++            # взыскивается в определённом размере.
++            if not proportional:
++                granted.append((fee_paid, 0))
++                if costs is not None:
++                    granted.append((costs, 0))
+ 
+     # Иные расходы по ст. 100 ГПК РФ не зависят от пошлины: их понёс
+     # истец, и суд возвращает их независимо от того, известна ли
+@@ -782,12 +829,25 @@ def build_operative(
+     # расходов» — это касается и ст. 100, поэтому иные расходы под
+     # флагом тоже не выводятся.
+     if costs is not None and fee_stakes and not (fee_paid is not None):
+-        result.items.append(
+-            f"Взыскать с {named.defendant_genitive} в пользу "
+-            f"{named.plaintiff_genitive} иные расходы в размере "
+-            f"{_amount(costs)} (ст. 100 ГПК РФ)."
+-        )
+-        granted.append((costs, 0))
++        if proportional:
++            result.items.append(
++                f"Взыскать с {named.defendant_genitive} в пользу "
++                f"{named.plaintiff_genitive} иные расходы пропорционально "
++                f"размеру удовлетворённых исковых требований в размере "
++                f"{REVIEW} (ст. 100 ГПК РФ)."
++            )
++            result.gaps.append(
++                "исход по части требований не полный — размер иных "
++                "расходов пропорционален удовлетворённой части и "
++                "требует расчёта судьи"
++            )
++        else:
++            result.items.append(
++                f"Взыскать с {named.defendant_genitive} в пользу "
++                f"{named.plaintiff_genitive} иные расходы в размере "
++                f"{_amount(costs)} (ст. 100 ГПК РФ)."
++            )
++            granted.append((costs, 0))
+ 
+     # 5. Итог «а всего». Так пишут в резолюции: одна цифра, из которой
+     #    видно общий размер взыскания.
+diff --git a/backend/app/drafting/requirements.py b/backend/app/drafting/requirements.py
+index db826e2..e573b56 100644
+--- a/backend/app/drafting/requirements.py
++++ b/backend/app/drafting/requirements.py
+@@ -12,11 +12,14 @@
+ из материалов, а не выдумываются моделью.
+ 
+ ГЛАВНОЕ ОГРАНИЧЕНИЕ
+-    Модуль НЕ определяет, удовлетворять требование или отказать.
+-    Это решение принимает судья. Здесь собирается лишь форма: что
+-    требовано, в каком размере и из какого документа это взято.
+-    Поле outcome по умолчанию — удовлетворение, но судья может его
+-    изменить в интерфейсе, и тогда пункт перестроится.
++    Модуль НЕ решает, удовлетворять требование или отказать: это решение
++    принимает судья. Но когда исход уже есть в материалах дела — в
++    установительной части («исков подлежит удовлетворению частично»,
++    «взыскивает моральный вред в сумме 2 000 рублей») — проект обязан
++    его отразить, а не выдавать отказ за полное удовлетворение. Такой
++    исход подставляется в поле outcome (см. resolve_outcomes); если в
++    материалах исхода нет, остаётся требование истца, и судья меняет
++    его в интерфейсе.
+ 
+ ЧТО НЕ РАБОТАЕТ И ДОЛЖНО БЫТЬ ЗАМЕЧЕНО
+     Если требование сформулировано словами, не подпадающими под
+@@ -29,6 +32,7 @@
+ from __future__ import annotations
+ 
+ import re
++from dataclasses import replace
+ from typing import NamedTuple
+ 
+ from app.agents.claim_phrases import (
+@@ -511,6 +515,28 @@ def extract_requirements(
+         basis_match = claim_basis_match(requirement_text)
+         basis = basis_match[0] if basis_match is not None else None
+         if basis is None:
++            # Требование в долевой форме: «взыскать 1/3 часть от суммы
++            # ...». Рублёвой суммы требования в материалах может не
++            # быть — в real-10 она обезличена (<ОБЕЗЛИЧИНО> рублей
++            # 49 копеек), и окно уходило в нераспознанные. Проект
++            # выдавал «резолютивная часть не сформирована» — иск
++            # выглядел не поданным, хотя он подан.
++            #
++            # Требование остаётся видимым без суммы: в резолютивной
++            # части судья видит ТРЕБУЕТ ПРОВЕРКИ СПЕЦИАЛИСТОМ и сумму
++            # подставляет сам. Вычислять долю из55 021,47 нельзя:
++            # система не считает чисел, которых нет в материалах.
++            if _SHARE_FRACTION.search(requirement_text):
++                share_basis = "расходы в долевой части"
++                if share_basis not in money:
++                    money[share_basis] = MoneyClaim(
++                        amount=None,
++                        kopecks=0,
++                        basis=share_basis,
++                        source=source,
++                        outcome=Outcome.SATISFIED,
++                    )
++                continue
+             # Требование есть, а основание определить не удалось.
+             # Оно показывается судье, а не выбрасывается: молча
+             # потерянное требование выглядит как «исков не было».
+@@ -605,9 +631,230 @@ def extract_requirements(
+     # чего-то не хватает в материалах, судья должен это увидеть.
+     unrecognised.extend(_shorten(gap) for gap in pack.gaps[:5])
+ 
++    # Исход отражается из материалов дела, если он там есть (см.
++    # resolve_outcomes). Требования без исхода в материалах остаются
++    # требованиями истца — решение принимает судья.
++    resolved = resolve_outcomes(pack, list(money.values()))
++    money = {claim.basis: claim for claim in resolved}
++
+     return list(money.values()), list(others.values()), unrecognised
+ 
+ 
++#: Установительная (мотивировочная) часть решения суда.
++#:
++#: Файл court_decision_reference.txt НЕ читается намеренно: это ключ
++#: к делу — сам ответ суда, по которому проверяется работа проекта.
++#: Исход, вычитанный из ключа, превратил бы проверку в самопроверку.
++_FINDINGS_MARKER = re.compile(
++    r"считает\s+(?:иск|требован|исков)"
++    r"|подлежащ\w*\s+удовлетворени"
++    r"|удовлетвор\w*\s+частично"
++    r"|установленн\w*\s+обстоятель"
++    r"|исследовав\s+(?:доказатель|материал)"
++    r"|заслушав\s+(?:объяснени|пояснени)",
++    re.I,
++)
++
++_REFERENCE_DOCUMENT = re.compile(r"court_decision_reference", re.I)
++
++#: Требование в долевой форме: «взыскать 1/3 часть от суммы ...»,
++#: «взыскивает 1/2 части». Сумма требования здесь — не рубль, а доля,
++#: и рублёвого числа требования в материалах может не быть.
++_SHARE_FRACTION = re.compile(r"\b\d+\s*/\s*\d+\s+част", re.I)
++
++#: Заголовок мотивировочной части — «УСТАНОВИЛ:» отдельной строкой или
++#: шапка «ОБСТОЯТЕЛЬСТВА, УСТАНОВЛЕННЫЕ СУДОМ». Без требования заголовка
++#: в установительную часть попал протокол судебного заседания: там
++#: цитируется иск («Просит ... взыскать ... 9 000 руб.»), и цитата
++#: подтверждала исход требования самим иском — суд «удовлетворял» то,
++#: что истец просил, а решение ещё не принято.
++_FINDINGS_HEADING = re.compile(
++    r"^\s*УСТАНОВИЛ\s*:?\s*$|ОБСТОЯТЕЛЬСТВА,\s*УСТАНОВЛЕННЫЕ\s+СУДОМ",
++    re.I | re.M,
++)
++
++#: Материалы прямо говорят о частичном удовлетворении: либо общая
++#: формулировка («исков подлежит удовлетворению частично»), либо
++#: отказ в остальной части.
++_PARTIAL_SIGNAL = re.compile(
++    r"удовлетвор\w*\s+частично"
++    r"|в\s+остальной\s+части[^.]{0,120}отказать",
++    re.I,
++)
++
++#: Процентный штраф (ст. 13 ЗПП): 50 % присужденных сумм идёт
++#: потребителю и организации по защите прав потребителей. Это
++#: санкция суда, а не неустойка истца: фраза со штрафом не должна
++#: подтверждать исход требования о неустойке.
++_SANCTION_PERCENT = re.compile(r"штраф\w*[^.]{0,40}\d+\s*%", re.I)
++
++
++def _anchor_basis(fragment: str) -> str | None:
++    """Основание требования внутри отдельного предложения.
++
++    Используются якоря (CLAIM_BASIS_ANCHORS), а не полные шаблоны
++    требований: в установительной части суд пишет не «истец просит
++    взыскать», а «суд взыскивает» — глагол требования там отсутствует.
++    """
++    for pattern, basis in CLAIM_BASIS_ANCHORS:
++        if pattern.search(fragment):
++            return basis
++    return None
++
++
++def _findings_streams(pack: EvidencePack) -> list[tuple[str, str]]:
++    """Документы с установительной частью решения суда.
++
++    Берутся сплошные тексты (pack.documents), а не размеченные фразы
++    пакета: классификатор оставляет по одному признаку на фразу, и
++    ключевые предложения установительной части («исков подлежит
++    удовлетворению частично», «взыскивает моральный вред в сумме
++    2000 рублей») в размеченных фразах отсутствуют. По делу real-06
++    пакет хранил 1 241 символ из 4 255 — исход по ним не определялся
++    вовсе.
++
++    Документ должен нести заголовок установительной части
++    («УСТАНОВИЛ:» / «ОБСТОЯТЕЛЬСТВА, УСТАНОВЛЕННЫЕ СУДОМ»). Без него
++    протокол заседания попадал сюда же: там цитируется иск («просит
++    взыскать ... 9 000 руб.»), и цитата подтверждала исход требования
++    самим иском — суд «удовлетворял» то, что истец просил, хотя
++    решение ещё не принято.
++    """
++    streams = (
++        list(pack.documents.items())
++        if pack.documents
++        else _document_streams(pack)
++    )
++    return [
++        (source, text)
++        for source, text in streams
++        if not _REFERENCE_DOCUMENT.search(source)
++        and _FINDINGS_HEADING.search(text)
++        and _FINDINGS_MARKER.search(text)
++    ]
++
++
++def resolve_outcomes(
++    pack: EvidencePack, claims: list[MoneyClaim]
++) -> list[MoneyClaim]:
++    """Отразить исход требования, если он есть в материалах дела.
++
++    Раньше исход по умолчанию был «удовлетворено» для каждого
++    требования, и проект писал «в полном объёме» там, где суд отказал
++    в части (real-06: суд взыскал моральный вред 2 000 из заявленных
++    7 000 и отказал в остальной части). Это решение суда, которое
++    подготовительная машина выдавала за своё.
++
++    Правила — только по материалам, без догадок:
++
++    1. В установительной части нашлось основание требования с той же
++       суммой — исход подтверждён, требование удовлетворяется.
++    2. Нашлось основание с меньшей суммой — частичное удовлетворение
++       с указанием суммы, установленной судом.
++    3. Материалы прямо говорят о частичном удовлетворении («исков
++       подлежит удовлетворению частично», «в остальной части отказать»),
++       а основание в установительной части не нашлось — исход
++       неизвестен: требование помечается как частичное без суммы, и в
++       резолюции появляется пробел, который судья заполнит сам.
++    4. Сигналов нет (дело ещё не решено) — исход не меняется:
++       требование остаётся тем, что просил истец.
++
++    Установительная часть не читается из court_decision_reference.txt:
++    это ключ к делу, и исход из него сделал бы проверку самопроверкой.
++    """
++    findings = _findings_streams(pack)
++    if not findings or not claims:
++        return claims
++
++    findings_text = "\n".join(text for _source, text in findings)
++    findings_source = findings[0][0]
++    partial_signal = bool(_PARTIAL_SIGNAL.search(findings_text))
++
++    # Суммы, которые суд установил по каждому основанию.
++    granted: dict[str, list[tuple[int, int]]] = {}
++    for fragment in _fragments(findings_text):
++        if _SANCTION_PERCENT.search(fragment):
++            continue
++        for pattern, basis in CLAIM_BASIS_ANCHORS:
++            match = pattern.search(fragment)
++            if match is None:
++                continue
++            # Сумма ищется после основания: в предложении «суд
++            # взыскивает моральный вред в сумме 2 000 рублей» она
++            # стоит позади, а первая сумма предложения могла бы
++            # принадлежать соседнему пункту.
++            found = _find_amount_with_kopecks(fragment[match.end() :])
++            if found is None:
++                found = _find_amount_with_kopecks(fragment)
++            if found is not None:
++                granted.setdefault(basis, []).append(found)
++            break
++
++    resolved: list[MoneyClaim] = []
++    for claim in claims:
++        if claim.amount is None:
++            # Требование без суммы: сравнивать не с чем, исход
++            # остаётся на усмотрение судьи.
++            resolved.append(claim)
++            continue
++
++        claim_key = (int(claim.amount), claim.kopecks)
++        amounts = granted.get(claim.basis, [])
++
++        if claim_key in amounts:
++            # Удовлетворение подтверждено материалами: сумма суда
++            # совпала с суммой требования.
++            resolved.append(claim)
++            continue
++
++        smaller = [key for key in amounts if key < claim_key]
++        if smaller:
++            granted_whole, granted_kop = max(smaller)
++            resolved.append(
++                replace(
++                    claim,
++                    outcome=Outcome.PARTIAL,
++                    granted_amount=float(granted_whole),
++                    granted_kopecks=granted_kop,
++                    grounds=f"сумма, установленная судом (см. {findings_source})",
++                )
++            )
++            continue
++
++        if amounts:
++            # Сумма суда больше требуемой — такого быть не должно.
++            # Требование остаётся без исхода, а расхождение видно
++            # судье по номерам в установительной части.
++            resolved.append(claim)
++            continue
++
++        if partial_signal:
++            resolved.append(
++                replace(
++                    claim,
++                    outcome=Outcome.PARTIAL,
++                    granted_amount=None,
++                    grounds=(
++                        "материалы указывают на частичное удовлетворение, "
++                        f"сумма по основанию не установлена (см. {findings_source})"
++                    ),
++                )
++            )
++            continue
++
++        resolved.append(claim)
++    return resolved
++
++
++def _fragments(text: str) -> list[str]:
++    """Предложения установительной части: по ним опознаётся основание."""
++    return [
++        piece.strip()
++        for piece in re.split(r"(?:[.!?]|\n)+", text)
++        if len(piece.strip()) > 15
++    ]
++
++
+ def extract_counter_claims(pack: EvidencePack) -> list[CounterClaim]:
+     """Встречные требования ответчика из материалов дела.
+ 
+diff --git a/backend/tests/test_outcomes.py b/backend/tests/test_outcomes.py
+new file mode 100644
+index 0000000..f38ecbe
+--- /dev/null
++++ b/backend/tests/test_outcomes.py
+@@ -0,0 +1,210 @@
++"""Тест: исход требования отражается из материалов дела, а не по умолчанию.
++
++Дефект (реальное дело real-06): суд взыскал моральный вред 2 000 руб.
++из заявленных 7 000 руб., неустойку и стоимость телефона — полностью,
++в остальной части иска отказал. Проект писал про каждое требование
++«удовлетворить в полном объёме» — система выдавала отказ суда за
++полное удовлетворение.
++
++Правила (resolve_outcomes), проверяемые здесь:
++1. Установительная часть подтверждает сумму требования — исход
++   удовлетворён.
++2. Установительная часть называет меньшую сумму — частичное
++   удовлетворение с суммой, установленной судом.
++3. Материалы прямо говорят о частичном удовлетворении, а суммы по
++   основанию нет — исход неизвестен: требование помечается частичным
++   без суммы (в резолюции появляется пробел для судьи).
++4. Установительной части нет (дело не решено) — исход не меняется.
++
++Отдельный тест: файл court_decision_reference.txt — ключ к делу, и
++чтение исхода из него превратило бы проверку в самопроверку.
++"""
++
++from __future__ import annotations
++
++from app.agents.evidence_pack import EvidenceItem, EvidencePack
++from app.drafting.operative import Outcome
++from app.drafting.requirements import extract_requirements
++
++CLAIM = (
++    "Прошу взыскать с ответчика в пользу истца: стоимость сотового "
++    "телефона 6 890 руб., неустойку 6 890 руб., компенсацию морального "
++    "вреда 7 000 руб., убытки 3 000 руб., расходы на оплату услуг "
++    "представителя 9 000 руб."
++)
++
++# Установительная часть — те же фразы, что в реальном деле real-06,
++# включая заголовок отдельной строкой: без него документ не считается
++# установительной частью — иначе протокол заседания с цитатой иска
++# подтверждал бы исход требования самим иском.
++FINDINGS = (
++    "УСТАНОВИЛ:\n"
++    "Суд, заслушав объяснения истца, проверив материалы дела, "
++    "считает иск обоснованным, и подлежащим удовлетворению частично.\n"
++    "Согласно представленных суду документов установлено, что "
++    "24 ноября 2011 года истец приобрел сотовый телефон стоимостью "
++    "6890 рублей.\n"
++    "Требование о возмещении неустойки в размере 6890 рублей не "
++    "превышает стоимости товара.\n"
++    "Учитывая, степень перенесенных истцом физических и нравственных "
++    "страданий, суд взыскивает моральный вред в сумме 2000 рублей.\n"
++    "В соответствии со ст. 15 ГК РФ, лицо, право которого нарушено, "
++    "может требовать полного возмещения причиненных ему убытков.\n"
++)
++
++# Ключ к делу: операционная часть настоящего решения. Читаться не должна.
++REFERENCE = (
++    "РЕШИЛ: Взыскать стоимость сотового телефона 6890 руб., неустойку "
++    "6890 руб., в возмещение морального вреда 2000 руб., убытки "
++    "3000 руб., штраф 3445 руб. В остальной части иска отказать."
++)
++
++
++def _pack(*, findings: bool = False, reference: bool = False) -> EvidencePack:
++    items = [
++        EvidenceItem(
++            category="claims",
++            text=CLAIM,
++            source_document="01_claim.txt",
++            source_type="иск",
++            amounts=["6890", "7000", "3000", "9000"],
++            order=1,
++        )
++    ]
++    if findings:
++        items.append(
++            EvidenceItem(
++                category="protocol_findings",
++                text=FINDINGS,
++                source_document="06_court_findings.txt",
++                source_type="мотивировочная часть",
++                amounts=["6890", "2000"],
++                order=1,
++            )
++        )
++    if reference:
++        items.append(
++            EvidenceItem(
++                category="evidence",
++                text=REFERENCE,
++                source_document="court_decision_reference.txt",
++                source_type="решение суда (ключ)",
++                amounts=["6890", "2000", "3445"],
++                order=2,
++            )
++        )
++    return EvidencePack(items=items, amounts=["6890", "7000", "3000", "9000"])
++
++
++def _money_by_basis(pack: EvidencePack) -> dict[str, object]:
++    money, _others, _unrecognised = extract_requirements(pack)
++    return {claim.basis: claim for claim in money}
++
++
++class TestOutcomeFromFindings:
++    def test_same_amount_is_satisfied(self) -> None:
++        """Сумма суда совпала с требованием — удовлетворено."""
++        claims = _money_by_basis(_pack(findings=True))
++        claim = claims["возмещение стоимости имущества"]
++        assert claim.outcome is Outcome.SATISFIED
++        assert claim.amount == 6890
++
++    def test_penalty_confirmed_by_findings(self) -> None:
++        claims = _money_by_basis(_pack(findings=True))
++        assert claims["неустойка и санкции"].outcome is Outcome.SATISFIED
++
++    def test_smaller_amount_is_partial(self) -> None:
++        """Моральный вред: 2 000 из 7 000 — частичное удовлетворение."""
++        claims = _money_by_basis(_pack(findings=True))
++        claim = claims["компенсация морального вреда"]
++        assert claim.outcome is Outcome.PARTIAL
++        assert claim.granted_amount == 2000
++        assert claim.granted_kopecks == 0
++
++    def test_absent_in_granted_list_is_unknown(self) -> None:
++        """Убытки и представитель в установительной части не названы.
++
++        Материалы говорят о частичном удовлетворении, но суммы по этим
++        основаниям суд не называл. Исход остаётся неизвестным — это
++        частичное удовлетворение без суммы, то есть пробел для судьи,
++        а не «в полном объёме».
++        """
++        claims = _money_by_basis(_pack(findings=True))
++        for basis in ("убытки", "расходы на представителя"):
++            claim = claims[basis]
++            assert claim.outcome is Outcome.PARTIAL, basis
++            assert claim.granted_amount is None, basis
++
++    def test_partial_without_findings_keeps_claim(self) -> None:
++        """Установительной части нет — дело не решено, исход не трогаем."""
++        claims = _money_by_basis(_pack())
++        for basis, claim in claims.items():
++            assert claim.outcome is Outcome.SATISFIED, basis
++
++    def test_reference_document_is_not_read(self) -> None:
++        """Ключ к делу не источник исхода.
++
++        В файле reference есть и «В остальной части иска отказать»,
++        и суммы суда. Если бы их прочитали, убытки получили бы исход
++        по ключу, и проверка подтверждала бы себя саму.
++        """
++        claims = _money_by_basis(_pack(reference=True))
++        assert claims["убытки"].outcome is Outcome.SATISFIED
++        assert claims["расходы на представителя"].outcome is Outcome.SATISFIED
++        # Моральный вред в ключе — 2 000, но ключ источником не является.
++        assert claims["компенсация морального вреда"].outcome is Outcome.SATISFIED
++
++    def test_findings_and_reference_together(self) -> None:
++        """Наличие ключа не мешает чтению настоящей установительной."""
++        claims = _money_by_basis(_pack(findings=True, reference=True))
++        claim = claims["компенсация морального вреда"]
++        assert claim.outcome is Outcome.PARTIAL
++        assert claim.granted_amount == 2000
++
++    def test_protocol_without_heading_is_not_findings(self) -> None:
++        """Протокол заседания не считается установительной частью.
++
++        Дефект, найденный на живом прогоне real-06: в протоколе
++        цитируется иск («просит взыскать ... 9 000 руб.»), и цитата
++        подтверждала исход требования самим иском — суд «удовлетворял»
++        то, что истец просил, хотя решение ещё не принято. Требование
++        заголовка («УСТАНОВИЛ:») отделяет настоящую установительную
++        часть от протокола.
++        """
++        protocol_only = EvidencePack(
++            items=[
++                EvidenceItem(
++                    category="claims",
++                    text=CLAIM,
++                    source_document="01_claim.txt",
++                    source_type="иск",
++                    amounts=["7000"],
++                    order=1,
++                ),
++                EvidenceItem(
++                    category="objections",
++                    text=(
++                        "Представитель истца в заседании просил взыскать "
++                        "7 000 руб. компенсации морального вреда."
++                    ),
++                    source_document="05_protocol.txt",
++                    source_type="протокол",
++                    amounts=["7000"],
++                    order=2,
++                ),
++            ],
++            amounts=["7000"],
++            documents={
++                "01_claim.txt": CLAIM,
++                "05_protocol.txt": (
++                    "ПРОТОКОЛ СУДЕБНОГО ЗАСЕДАНИЯ\n"
++                    "Представитель истца пояснил, что просит взыскать "
++                    "7 000 руб. компенсации морального вреда."
++                ),
++            },
++        )
++        claims = _money_by_basis(protocol_only)
++        # Исход из протокола не читается: требование остаётся тем,
++        # что просил истец, пока нет настоящей установительной части.
++        for basis, claim in claims.items():
++            assert claim.outcome is Outcome.SATISFIED, basis
+diff --git a/backend/tests/test_real_rules.py b/backend/tests/test_real_rules.py
+index ea9f1c8..412f64c 100644
+--- a/backend/tests/test_real_rules.py
++++ b/backend/tests/test_real_rules.py
+@@ -105,14 +105,39 @@ class TestTotalLine:
+ 
+         Иначе в проекте окажется сумма, которую суд не взыскал, и
+         исполнительный лист будет выдан на неё.
++
++        Пошлина при частичном удовлетворении в итог НЕ входит: ч. 1
++        ст. 98 ГПК РФ присуждает её пропорционально удовлетворённой
++        части, а пропорцию считает судья. Раньше итог был «90 000 +
++        5 100 пошлина», проект противоречил сам себе — пункт о
++        пошлинной пропорции стоял строкой выше.
+         """
+         claim = MoneyClaim(amount=150000, granted_amount=90000,
+                            basis="неустойка", source="договор",
+                            outcome=Outcome.PARTIAL)
+         result = build_operative([claim], fee_paid=5100)
+         text = result.render()
+-        assert "95 100" in text
++        assert "90 000" in text
+         assert "155 100" not in text
++        assert "95 100" not in text
++        # Пункт о пошлине перешёл на пропорциональную формулировку.
++        assert "пропорционально" in text
++        assert "ТРЕБУЕТ ПРОВЕРКИ СПЕЦИАЛИСТОМ" in text
++
++    def test_fee_full_amount_when_outcome_unknown(self) -> None:
++        """Если исход не определён (требование без частичности) — пошлина полной суммой.
++
++        Пропорциональность применяется только когда есть что делить:
++        частичное удовлетворение или отказ в части. Требование истца
++        без сигналов из материалов остаётся в полном объёме, и пошлина
++        взыскивается полностью.
++        """
++        claim = MoneyClaim(amount=150000, basis="убытки",
++                           source="договор", outcome=Outcome.SATISFIED)
++        result = build_operative([claim], fee_paid=5100)
++        text = result.render()
++        assert "155 100" in text
++        assert "пропорционально" not in text
+ 
+ 
+ class TestNamedParties:
+diff --git a/backend/tests/test_share_and_utilities.py b/backend/tests/test_share_and_utilities.py
+new file mode 100644
+index 0000000..fa95446
+--- /dev/null
++++ b/backend/tests/test_share_and_utilities.py
+@@ -0,0 +1,130 @@
++"""Тест: требования, найденные на живых прогонах 22.10.2026.
++
++Два дефекта, которые система не видела на synthetic-тестах:
++
++1. real-10: требование «взыскать 1/3 часть от суммы 55 021,47» —
++   рублёвой суммы требования в материалах нет (обезличена), и окно
++   уходило в нераспознанные. Проект выдавал «резолютивная часть не
++   сформирована» — иск выглядел не поданным, хотя он подан.
++
++2. real-01: «задолженность за ЖКУ 11 107,84» и уточнение «задолженность
++   по оплате за ремонт и содержание жилья 7 919,17» схлопывались в
++   одно основание «задолженность по договору», и проект требовал
++   выбрать одну из двух сумм вместо двух пунктов.
++"""
++
++from __future__ import annotations
++
++from app.agents.claim_phrases import claim_basis
++from app.agents.evidence_pack import EvidenceItem, EvidencePack
++from app.drafting.operative import Outcome
++from app.drafting.requirements import extract_requirements
++
++
++def _money(text: str) -> dict[str, object]:
++    pack = EvidencePack(
++        items=[
++            EvidenceItem(
++                category="claims",
++                text=text,
++                source_document="01_claim.txt",
++                source_type="иск",
++                order=1,
++            )
++        ],
++    )
++    money, _others, _unrecognised = extract_requirements(pack)
++    return {claim.basis: claim for claim in money}
++
++
++class TestShareClaim:
++    """Долевое требование — требование, а не пустое место."""
++
++    SHARE = (
++        "Просит взыскать с ответчика 1/3 часть, то есть часть "
++        "пропорциональную его доли в праве общей долевой собственности, "
++        "от суммы уплаченной за услуги газоснабжения, составляющей "
++        "55021 рубль 47 копеек."
++    )
++
++    def test_share_claim_extracted(self) -> None:
++        claims = _money(self.SHARE)
++        assert "расходы в долевой части" in claims
++
++    def test_share_claim_has_no_amount(self) -> None:
++        """Сумма требования — доля, а не рубль: системы не считает её.
++
++        Число, которого нет в материалах, система не выдумывает:
++        сумма остаётся None, и в резолютивной части судья видит
++        ТРЕБУЕТ ПРОВЕРКИ СПЕЦИАЛИСТОМ.
++        """
++        claim = _money(self.SHARE)["расходы в долевой части"]
++        assert claim.amount is None
++
++    def test_share_claim_renders_for_judge(self) -> None:
++        """Требование не пропадает из резолютивной части."""
++        pack = EvidencePack(
++            items=[
++                EvidenceItem(
++                    category="claims",
++                    text=self.SHARE,
++                    source_document="01_claim.txt",
++                    source_type="иск",
++                    order=1,
++                )
++            ],
++        )
++        money, _others, _unrec = extract_requirements(pack)
++        from app.drafting.operative import build_operative
++
++        text = build_operative(money).render()
++        assert "расходы в долевой части" in text
++        assert "ТРЕБУЕТ ПРОВЕРКИ СПЕЦИАЛИСТОМ" in text
++
++
++class TestUtilitiesVsRepair:
++    """ЖКУ и ремонт — разные требования, а не одна задолженность."""
++
++    def test_claim_basis_split(self) -> None:
++        assert (
++            claim_basis("взыскать задолженность за жилищно-коммунальные "
++                        "услуги в размере 11107 руб.")
++            == "задолженность за жилищно-коммунальные услуги"
++        )
++        assert (
++            claim_basis("взыскать задолженность по оплате за ремонт "
++                        "и содержание жилья в размере 7919 руб.")
++            == "задолженность за ремонт и содержание жилья"
++        )
++
++    def test_generic_debt_still_works(self) -> None:
++        """Общий якорь не ослаблен: простая задолженность не изменилась."""
++        assert claim_basis("взыскать задолженность по договору в размере "
++                           "150000 руб.") == "задолженность по договору"
++
++    def test_split_needs_only_one_word_after_debt(self) -> None:
++        """Разбор по пунктам режет «ремонт и содержание» по «и».
++
++        Окно «задолженность по оплате за ремонт и содержание жилья ...
++        7 919 руб., по оплате коммунальных услуг ... 3 188 руб.»
++        дробится, и кусок доходит как «задолженность ... за ремонт».
++        Шаблон обязан узнавать основание и по одному слову.
++        """
++        assert (
++            claim_basis("взыскать задолженность по оплате за ремонт "
++                        "в размере 7919 руб.")
++            == "задолженность за ремонт и содержание жилья"
++        )
++
++
++class TestBothDebtsInOneWindow:
++    def test_two_debts_two_claims(self) -> None:
++        """Два требования в одном окне дают два пункта, не конфликт."""
++        claims = _money(
++            "Просит взыскать с ответчика задолженность за жилищно-"
++            "коммунальные услуги в размере 11107 рублей 84 копейки."
++        )
++        assert "задолженность за жилищно-коммунальные услуги" in claims
++        claim = claims["задолженность за жилищно-коммунальные услуги"]
++        assert claim.amount == 11107
++        assert claim.outcome is Outcome.SATISFIED
+diff --git a/scripts/build_real_site.py b/scripts/build_real_site.py
+index 7224839..c6def93 100644
+--- a/scripts/build_real_site.py
++++ b/scripts/build_real_site.py
+@@ -185,6 +185,14 @@ async def process(case_dir: Path) -> dict[str, Any]:
+                     "basis": claim.basis,
+                     "source": claim.source,
+                     "outcome": str(claim.outcome.value),
++                    # Присуждённая сумма при частичном удовлетворении:
++                    # по ней аудит сверяет итог резолютивной части.
++                    "granted_amount": (
++                        float(claim.granted_amount)
++                        if claim.granted_amount is not None
++                        else None
++                    ),
++                    "granted_kopecks": int(claim.granted_kopecks),
+                 }
+                 for claim in money
+             ],
+diff --git a/scripts/e2e_audit.py b/scripts/e2e_audit.py
+index 620ffc3..85f0c99 100644
+--- a/scripts/e2e_audit.py
++++ b/scripts/e2e_audit.py
+@@ -103,26 +103,40 @@ def audit_case(case_dir: Path) -> dict[str, Any]:
+     # 10 000,00 + 20 921,53 + 10 460,76 печаталось как «41 381 руб.
+     # 29 коп.» вместо «41 382 руб. 29 коп.» (real-05).
+     #
+-    # Считаются только удовлетворённые требования: резолюция строит
+-    # итог по тем, что присуждены, а отказные и частичные в него не
+-    # входят. Иначе сверка завела бы дефект на правильном выводе.
++    # Считается присуждённое: полная сумма при полном удовлетворении,
++    # сумма суда — при частичном (как в резолютивной). Пошлина и иные
++    # расходы входят, только если исход ни по одному требованию не
++    # отличается от «удовлетворено»: иначе ч. 1 ст. 98 ГПК РФ
++    # присуждает их пропорционально, а пропорцию считает судья.
+     total_line = re.search(
+-        r"Всего подлежит взысканию\s+([\d\s   ]+)\s*\([^)]*\)\s*руб\.\s*"
++        r"Всего подлежит взысканию\s+([\d\s   ]+)\s*\([^)]*\)\s*руб\.\s*"
+         r"(\d{1,2})\s*коп",
+         operative,
+     )
+     costs = float(rules.get("costs") or 0)
+-    satisfied = [
+-        claim
+-        for claim in (rules.get("claims") or [])
+-        if claim.get("outcome", "satisfied") == "satisfied"
+-    ]
+-    expected_kopecks = sum(int(claim.get("kopecks") or 0) for claim in satisfied)
++    all_claims = rules.get("claims") or []
++    proportional = any(
++        claim.get("outcome", "satisfied") != "satisfied" for claim in all_claims
++    )
++    counted: list[tuple[float, int]] = []
++    for claim in all_claims:
++        outcome = claim.get("outcome", "satisfied")
++        if outcome == "satisfied":
++            counted.append(
++                (float(claim.get("amount") or 0), int(claim.get("kopecks") or 0))
++            )
++        elif outcome == "partial" and claim.get("granted_amount") is not None:
++            counted.append(
++                (
++                    float(claim["granted_amount"]),
++                    int(claim.get("granted_kopecks") or 0),
++                )
++            )
++    expected_kopecks = sum(kop for _, kop in counted)
+     expected_total = (
+-        sum(float(claim.get("amount") or 0) for claim in satisfied)
++        sum(amount for amount, _ in counted)
+         + expected_kopecks // 100
+-        + fee
+-        + costs
++        + (0 if proportional else fee + costs)
+     )
+     expected_kopecks = expected_kopecks % 100
+     if total_line:
+-- 
+2.53.0.windows.2
+

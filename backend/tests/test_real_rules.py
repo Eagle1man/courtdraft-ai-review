@@ -105,14 +105,39 @@ class TestTotalLine:
 
         Иначе в проекте окажется сумма, которую суд не взыскал, и
         исполнительный лист будет выдан на неё.
+
+        Пошлина при частичном удовлетворении в итог НЕ входит: ч. 1
+        ст. 98 ГПК РФ присуждает её пропорционально удовлетворённой
+        части, а пропорцию считает судья. Раньше итог был «90 000 +
+        5 100 пошлина», проект противоречил сам себе — пункт о
+        пошлинной пропорции стоял строкой выше.
         """
         claim = MoneyClaim(amount=150000, granted_amount=90000,
                            basis="неустойка", source="договор",
                            outcome=Outcome.PARTIAL)
         result = build_operative([claim], fee_paid=5100)
         text = result.render()
-        assert "95 100" in text
+        assert "90 000" in text
         assert "155 100" not in text
+        assert "95 100" not in text
+        # Пункт о пошлине перешёл на пропорциональную формулировку.
+        assert "пропорционально" in text
+        assert "ТРЕБУЕТ ПРОВЕРКИ СПЕЦИАЛИСТОМ" in text
+
+    def test_fee_full_amount_when_outcome_unknown(self) -> None:
+        """Если исход не определён (требование без частичности) — пошлина полной суммой.
+
+        Пропорциональность применяется только когда есть что делить:
+        частичное удовлетворение или отказ в части. Требование истца
+        без сигналов из материалов остаётся в полном объёме, и пошлина
+        взыскивается полностью.
+        """
+        claim = MoneyClaim(amount=150000, basis="убытки",
+                           source="договор", outcome=Outcome.SATISFIED)
+        result = build_operative([claim], fee_paid=5100)
+        text = result.render()
+        assert "155 100" in text
+        assert "пропорционально" not in text
 
 
 class TestNamedParties:

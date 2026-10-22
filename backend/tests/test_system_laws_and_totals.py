@@ -23,7 +23,7 @@ from __future__ import annotations
 
 from app.agents.draft_agent import DraftResult, SectionDraft
 from app.agents.evidence_pack import EvidenceItem, EvidencePack
-from app.verification.engine import Severity, verify_draft
+from app.verification.engine import Severity, VerificationReport, verify_draft
 
 OPERATIVE = (
     "Руководствуясь ст. 198 ГПК РФ, суд решил:\n"
@@ -87,6 +87,73 @@ class TestOperativeIsNotAccused:
         report = _report()
         flagged = [i.reason for i in report.issues if "не подтверждена" in i.reason]
         assert flagged == [], flagged
+
+
+class TestRulesBuiltSectionsNotAccused:
+    """Разделы правил не обвиняются в выдумке модели.
+
+    Живой прогон 22.10.2026 (real-04): итог резолюции 32 692 руб.
+    60 коп. — сумма четырёх требований плюс иные расходы, копейки
+    перенесены из требований. Такого числа в материалах в готовом
+    виде быть не может, и проверка помечала его выдумкой модели:
+    8 CRITICAL на проекте без единой выдумки, а настоящие тревоги в
+    этом шуме не видно.
+    """
+
+    TOTAL_SECTION = (
+        "Руководствуясь ст. 198 ГПК РФ, суд решил:\n"
+        "1. Удовлетворить исковые требования истца в полном объёме: "
+        "взыскать с Ответчик в пользу Истец 10 490 руб. 00 коп. "
+        "(ущерб, 01_claim.txt).\n"
+        "2. Взыскать 32 692 руб. 60 коп. всего (итог проекта)."
+    )
+
+    def _report_with(self, *, rules: bool) -> VerificationReport:
+        pack = EvidencePack(
+            items=[
+                EvidenceItem(
+                    category="claims",
+                    text=(
+                        "Прошу взыскать 10 490 руб. и 2 202 руб. 90 коп. "
+                        "и 10 000 руб. и 7 000 руб."
+                    ),
+                    source_document="01_claim.txt",
+                    source_type="иск",
+                    amounts=["10490", "2202", "10000", "7000"],
+                    order=1,
+                )
+            ],
+            amounts=["10490", "2202", "10000", "7000"],
+        )
+        section = SectionDraft(
+            key="operative",
+            name="РЕШИЛ",
+            text=self.TOTAL_SECTION,
+            is_mock=False,
+            citations=["01_claim.txt"],
+            **({"built_by": "rules"} if rules else {}),
+        )
+        return verify_draft(
+            DraftResult(case_number="X", provider="test", sections=[section]),
+            pack,
+        )
+
+    def test_rules_total_not_accused(self) -> None:
+        critical = [
+            i.reason
+            for i in self._report_with(rules=True).issues
+            if i.severity is Severity.CRITICAL
+        ]
+        assert critical == [], critical
+
+    def test_model_total_still_accused(self) -> None:
+        """Ослабления для модели нет: та же фраза от модели — тревога."""
+        critical = [
+            i.reason
+            for i in self._report_with(rules=False).issues
+            if i.severity is Severity.CRITICAL
+        ]
+        assert critical, "выдуманное число пропущено"
 
 
 class TestExemptionsAreNarrow:

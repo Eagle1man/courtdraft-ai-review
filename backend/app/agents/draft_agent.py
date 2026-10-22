@@ -64,6 +64,16 @@ class SectionDraft:
     needs_review: bool = False
     latency_ms: int = 0
     error: str = ""
+    #: Кто собрал текст: "model" — языковая модель, "rules" — правила.
+    #:
+    #: Проверка «число отсутствует в материалах» написана для текста
+    #: модели и только он может содержать выдумку. В разделах, собранных
+    #: правилами, числа — собственная арифметика проекта (итог,
+    #: копейки, госпошлина): она не бывает в материалах в готовом виде
+    #: и проверяется отдельно (scripts/e2e_audit.py). Раньше различия
+    #: не было, и верификация помечала собственный итог резолюции
+    #: выдумкой модели — 8 CRITICAL на проекте без единой выдумки.
+    built_by: str = "model"
 
 
 @dataclass
@@ -403,6 +413,7 @@ def _build_operative_section(section: dict[str, Any], pack: EvidencePack) -> Sec
         is_mock=False,
         citations=citations,
         needs_review=bool(result.gaps) or bool(unrecognised),
+        built_by="rules",
     )
 
 
@@ -458,6 +469,7 @@ def _build_intro_section(section: dict[str, Any], pack: EvidencePack) -> Section
         # Реквизиты взяты из материалов, а не из заглушки модели.
         is_mock=False,
         needs_review=True,
+        built_by="rules",
     )
 
 
@@ -487,6 +499,7 @@ def _build_objections_section(
                 f"{NEEDS_REVIEW}"
             ),
             needs_review=True,
+            built_by="rules",
         )
 
     paragraphs: list[str] = []
@@ -508,6 +521,7 @@ def _build_objections_section(
         # Цитаты собраны правилами из материалов дела, а не заглушкой.
         is_mock=False,
         citations=citations,
+        built_by="rules",
     )
 
 
