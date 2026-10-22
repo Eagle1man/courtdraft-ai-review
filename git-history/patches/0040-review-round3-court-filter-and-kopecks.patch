@@ -1,0 +1,451 @@
+From 51c076d5897089560cd7677bcf9fb22fa9a4ede1 Mon Sep 17 00:00:00 2001
+From: Eagle1man <orel198611@gmail.com>
+Date: Thu, 22 Oct 2026 03:34:57 +0300
+Subject: [PATCH] =?UTF-8?q?=D0=A2=D1=80=D0=B5=D1=82=D0=B8=D0=B9=20=D1=80?=
+ =?UTF-8?q?=D0=B0=D1=83=D0=BD=D0=B4=20=D1=80=D0=B5=D0=B2=D1=8C=D1=8E:=20?=
+ =?UTF-8?q?=D0=BE=D1=82=D1=81=D0=B5=D0=B2=20=D0=BE=D0=BF=D1=80=D0=B5=D0=B4?=
+ =?UTF-8?q?=D0=B5=D0=BB=D0=B5=D0=BD=D0=B8=D0=B9=20=D1=81=D1=83=D0=B4=D0=B0?=
+ =?UTF-8?q?,=20=D0=BF=D0=B5=D1=80=D0=B5=D0=BD=D0=BE=D1=81=20=D0=BA=D0=BE?=
+ =?UTF-8?q?=D0=BF=D0=B5=D0=B5=D0=BA,=20=D1=87=D0=B5=D1=81=D1=82=D0=BD?=
+ =?UTF-8?q?=D0=B0=D1=8F=20=D0=B7=D0=B0=D0=BC=D0=B5=D1=82=D0=BA=D0=B0=20?=
+ =?UTF-8?q?=D0=BE=20=D1=81=D1=83=D0=BC=D0=BC=D0=B0=D1=85?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Шесть находок закрыты. Отсев 'определения суда' теперь смотрит только последнее предложение перед окном и не срабатывает, если в нём истец назван действующим лицом ('истец считает необходимым взыскать...') - требование истца больше не исчезает молча. Заметка о конфликте сумм показывает оба источника и спрашивает осторожно ('уточнение или разные требования'): в real-01 11 107,84 (ЖКУ) и 7 919,17 (ремонт) - это разные задолженности, а не уточнение одной. Итог резолюции переносит копейки в рубли: 10000 + 20921,53 + 10460,76 = 41382,29, а не 41381,29. Добавлена форма 'расходы на проведение экспертизы', таблица итогов Этапа 2 помечена как снимок от 20.10.2026. +8 тестов, suite 758/0, ruff, mypy чисто.
+---
+ backend/app/drafting/operative.py     |  19 +++--
+ backend/app/drafting/requirements.py  |  61 +++++++++----
+ backend/tests/test_review_findings.py | 118 +++++++++++++++++++++++++-
+ docs/agent-summary.md                 |  13 ++-
+ docs/end-to-end-evaluation.md         |  41 +++++++++
+ 5 files changed, 222 insertions(+), 30 deletions(-)
+
+diff --git a/backend/app/drafting/operative.py b/backend/app/drafting/operative.py
+index dc02a5a..367e952 100644
+--- a/backend/app/drafting/operative.py
++++ b/backend/app/drafting/operative.py
+@@ -376,18 +376,21 @@ def _amount_with_words(value: float, kopecks: int = 0) -> str:
+     return f"{formatted} ({words}) руб. {kopecks:02d} коп."
+ 
+ 
+-def _sum_kopecks(values: list[tuple[float, int]]) -> int:
+-    """Сложить копейки по требованиям.
++def _sum_amounts(values: list[tuple[float, int]]) -> tuple[float, int]:
++    """Сложить суммы требований с переносом копеек в рубли.
+ 
+     Копейки хранятся отдельно от рублей, поэтому итог нельзя получить
+     простым сложением сумм: 5034 руб. 79 коп. плюс 400 руб. — это
+     5 434 руб. 79 коп., а не 5 434 руб. 00 коп. Ошибка была найдена
+     тестом на данных реального решения.
++
++    Перенос нужен в обе стороны: 20 921,53 + 10 460,76 дают 41 382,29, а
++    не 41 381,29. Без переноса итог в резолюции расходился с суммой
++    перечисленных пунктов на один рубль (real-05).
+     """
+-    total = 0
+-    for _, kopecks in values:
+-        total += kopecks
+-    return total % 100
++    rubles = sum(value for value, _ in values)
++    kopecks = sum(kopecks for _, kopecks in values)
++    return rubles + kopecks // 100, kopecks % 100
+ 
+ 
+ class Procedure(StrEnum):
+@@ -761,10 +764,10 @@ def build_operative(
+     # 5. Итог «а всего». Так пишут в резолюции: одна цифра, из которой
+     #    видно общий размер взыскания.
+     if total_line and granted:
+-        total_rubles = sum(value for value, _ in granted)
++        total_rubles, total_kopecks = _sum_amounts(granted)
+         result.items.append(
+             f"Всего подлежит взысканию "
+-            f"{_amount_with_words(total_rubles, _sum_kopecks(granted))}"
++            f"{_amount_with_words(total_rubles, total_kopecks)}"
+         )
+ 
+     # 6. Последствия заочного решения идут ДО права на обжалование.
+diff --git a/backend/app/drafting/requirements.py b/backend/app/drafting/requirements.py
+index ecce277..db826e2 100644
+--- a/backend/app/drafting/requirements.py
++++ b/backend/app/drafting/requirements.py
+@@ -80,7 +80,7 @@ FEE_PATTERNS = [
+ COSTS_PATTERN = re.compile(
+     r"(?:иные\s+расход\w*|расход\w*\s+на\s+(?:поездк|почтов\w+|\S+_ expert)"
+     r"|экспертиз\w*\s+и|расход\w*\s+на\s+оплат\w*\s+экспертиз\w*)"
+-    r"|затрат\w*\s+на\s+проведение\s+экспертиз\w*",
++    r"|(?:затрат\w*|расход\w*)\s+на\s+проведение\s+экспертиз\w*",
+     re.I,
+ )
+ 
+@@ -232,7 +232,12 @@ def _claim_windows(
+             chunk = text[start : min(end, start + CLAIM_WINDOW)]
+             if chunk.strip():
+                 context = text[max(0, start - 200) : start]
+-                windows.append((name, chunk, context))
++                # Для различения «требование истца» и «определение суда»
++                # важен только конец контекста: слова суда из соседнего
++                # предложения не должны превращать требование истца в
++                # приговор.
++                tail = re.split(r"(?<=[.;])\s+", context)
++                windows.append((name, chunk, tail[-1] if tail else ""))
+     return windows
+ 
+ 
+@@ -469,6 +474,7 @@ def extract_requirements(
+                         clause_name,
+                         int(existing_clause.amount),
+                         existing_clause.kopecks,
++                        existing_clause.source,
+                         clause_whole,
+                         clause_kopecks,
+                         source,
+@@ -492,7 +498,13 @@ def extract_requirements(
+             _add_note(
+                 unrecognised,
+                 _conflict_note(
+-                    conflict_name, first_sum, first_kop, second_sum, second_kop, source
++                    conflict_name,
++                    first_sum,
++                    first_kop,
++                    source,
++                    second_sum,
++                    second_kop,
++                    source,
+                 ),
+             )
+ 
+@@ -578,6 +590,7 @@ def extract_requirements(
+                     basis,
+                     int(existing.amount),
+                     existing.kopecks,
++                    existing.source,
+                     whole,
+                     kopecks,
+                     source,
+@@ -835,22 +848,31 @@ _COURT_DETERMINATION_RE = re.compile(
+     r"суд(?:ом)?\b[^.]{0,120}?(?:считает\s+необходимым|определил|постановил|"
+     r"присудил|решил|удовлетворил|отказал|признал)"
+     r"|считает\s+необходимым"
+-    r"|необходимо\s+взыскать"
+     r"|необходимо\s*$"
+     r"|подлежит\s+взысканию"
+     r"|подлежат\s+взысканию",
+     re.I,
+ )
+ 
++# Истец в именительном падеже — значит, говорит он, а не суд. «В пользу
++# истца» (родительный) — суд формулирует приговор, истец — нет.
++_ACTOR_IS_PLAINTIFF_RE = re.compile(r"\bистец\b", re.I)
++
+ 
+ def _is_court_determination(context: str) -> bool:
+     """Определение суда, а не требование истца.
+ 
+-    Смотрится только текст ПЕРЕД окном: «суд считает необходимым
+-    взыскать …» — это мотивировка, «просил взыскать …» — требование.
+-    Внутри окна смотреть нельзя: там может быть следующее требование
+-    истца, а слова суда стоят уже после глагола.
++    Смотрится только последнее предложение перед окном: «суд считает
++    необходимым взыскать …» — это мотивировка, «просил взыскать …» —
++    требование. Смотреть дальше нельзя: определение суда в соседнем
++    предложении не делает требованием истца следующее окно.
++
++    Если в этом предложении истец назван как действующее лицо
++    («истец считает, что необходимо взыскать …»), требование остаётся
++    требованием истца.
+     """
++    if _ACTOR_IS_PLAINTIFF_RE.search(context):
++        return False
+     return bool(_COURT_DETERMINATION_RE.search(context))
+ 
+ 
+@@ -883,17 +905,21 @@ def _conflict_note(
+     basis: str,
+     first: int,
+     first_kopecks: int,
++    first_source: str,
+     second: int,
+     second_kopecks: int,
+-    source: str,
++    second_source: str,
+ ) -> str:
+-    """Заметка для судьи: по одному основанию в материалах две суммы.
++    """Заметка для судьи: по одному основанию в материалах разные суммы.
+ 
+     Молчать здесь нельзя: в проекте стоит одна сумма, а судья видит
+-    в материалах две. Какая из них просительная — вопрос суда, но
+-    расхождение обязано быть видно. Копейки в заметке тоже: в
+-    проекте стоит 2 202,90, и «2 202» в заметке смотрелось бы как
+-    опечатка.
++    в материалах другую. Копейки в заметке тоже: в проекте стоит
++    2 202,90, и «2 202» в заметке смотрелось бы как опечатка.
++
++    Формулировка намеренно осторожная: по основанию «задолженность по
++    договору» две суммы в разных документах могут быть двумя разными
++    задолженностями (в real-01 — ЖКУ за один период и ремонт за
++    другой), а не уточнением одной. Что просить — решает судья.
+     """
+     def number(value: int, kopecks: int) -> str:
+         whole = f"{value:,}".replace(",", " ")
+@@ -902,9 +928,10 @@ def _conflict_note(
+         return whole
+ 
+     return (
+-        f"по требованию «{basis}» в материалах две суммы: "
+-        f"{number(first, first_kopecks)} и {number(second, second_kopecks)} "
+-        f"руб. ({source}) — какая просительная, решает судья"
++        f"по требованию «{basis}» в материалах разные суммы: "
++        f"{number(first, first_kopecks)} руб. ({first_source}) и "
++        f"{number(second, second_kopecks)} руб. ({second_source}) — "
++        f"уточнение или разные требования, решает судья"
+     )
+ 
+ 
+diff --git a/backend/tests/test_review_findings.py b/backend/tests/test_review_findings.py
+index 7267d72..64fa127 100644
+--- a/backend/tests/test_review_findings.py
++++ b/backend/tests/test_review_findings.py
+@@ -84,7 +84,7 @@ class TestConflictingAmountsAreVisible:
+         )
+         amounts = {claim.basis: claim.amount for claim in money}
+         assert amounts.get("убытки") == 5000
+-        assert any("две суммы" in item for item in unrecognised)
++        assert any("разные суммы" in item for item in unrecognised)
+         assert any("5 000" in item and "3 000" in item for item in unrecognised)
+ 
+ 
+@@ -162,7 +162,7 @@ class TestConflictNoteDetails:
+             "Взыскать с ответчика неустойку 2202 рубля 90 копеек "
+             "и неустойку 10564 рубля 40 копеек."
+         )
+-        notes = [item for item in unrecognised if "две суммы" in item]
++        notes = [item for item in unrecognised if "разные суммы" in item]
+         assert notes, unrecognised
+         assert "2 202,90" in notes[0]
+         assert "10 564,40" in notes[0]
+@@ -183,9 +183,40 @@ class TestConflictNoteDetails:
+                 )
+             )
+         _money, _others, unrecognised = extract_requirements(pack)
+-        notes = [item for item in unrecognised if "две суммы" in item]
++        notes = [item for item in unrecognised if "разные суммы" in item]
+         assert len(notes) == 1, unrecognised
+ 
++    def test_note_across_documents_shows_both_sources(self) -> None:
++        # Расхождение между документами истца (уточнённое требование)
++        # видно, и в заметке стоят оба источника.
++        pack = EvidencePack(case_number="T-REVIEW")
++        pack.items.append(
++            EvidenceItem(
++                category="claims",
++                text="Истец просит взыскать задолженность 11107 руб. 84 коп.",
++                source_document="01_claim.txt",
++                source_type="CLAIM",
++                order=1,
++            )
++        )
++        pack.items.append(
++            EvidenceItem(
++                category="claims",
++                text="Истец просил взыскать задолженность 7919 руб. 17 коп.",
++                source_document="05_protocol.txt",
++                source_type="CLAIM",
++                order=2,
++            )
++        )
++        _money, _others, unrecognised = extract_requirements(pack)
++        notes = [item for item in unrecognised if "разные суммы" in item]
++        assert notes, unrecognised
++        assert "01_claim.txt" in notes[0]
++        assert "05_protocol.txt" in notes[0]
++        # Формулировка осторожная: по основанию «задолженность» две
++        # суммы могут быть разными требованиями, а не уточнением.
++        assert "уточнение или разные требования" in notes[0]
++
+ 
+ class TestCostsAmountBelongsToMarker:
+     """Сумма иных расходов — та, что стоит после признака расходов.
+@@ -216,6 +247,87 @@ class TestCostsAmountBelongsToMarker:
+         assert costs == 3000
+ 
+ 
++class TestClaimOfPlaintiffSurvivesCourtWording:
++    """Требование истца не должно теряться из-за слов суда.
++
++    Отсев определений суда не должен съедать требование: «истец
++    считает необходимым взыскать …» — это требование истца, а
++    «суд постановил взыскать …» — определение суда, и слова суда из
++    соседнего предложения не делают требованием истца следующее окно.
++    """
++
++    def test_plaintiff_saying_necessary_is_kept(self) -> None:
++        money, _others, _unrecognised = _extract(
++            "Истец считает необходимым взыскать с ответчика задолженность "
++            "в размере 5000 рублей."
++        )
++        amounts = {claim.basis: claim.amount for claim in money}
++        assert amounts.get("задолженность по договору") == 5000
++
++    def test_plaintiff_thinking_necessary_is_kept(self) -> None:
++        money, _others, _unrecognised = _extract(
++            "Истец считает, что необходимо взыскать с ответчика "
++            "задолженность в размере 5000 рублей."
++        )
++        amounts = {claim.basis: claim.amount for claim in money}
++        assert amounts.get("задолженность по договору") == 5000
++
++    def test_court_wording_in_neighbouring_sentence_not_sticky(self) -> None:
++        money, _others, _unrecognised = _extract(
++            "Суд постановил взыскать с ответчика в пользу истца 1000 рублей. "
++            "Истец просил взыскать с ответчика задолженность в размере "
++            "5000 рублей."
++        )
++        amounts = {claim.basis: claim.amount for claim in money}
++        assert amounts.get("задолженность по договору") == 5000
++        assert "компенсация морального вреда" not in amounts
++
++    def test_court_reasoning_is_skipped(self) -> None:
++        money, _others, _unrecognised = _extract(
++            "При определении размера компенсации морального вреда суд "
++            "исходит из принципа разумности и справедливости, а также с "
++            "учетом нравственных страданий считает необходимым взыскать "
++            "с ответчика в пользу истца в счет компенсации морального "
++            "вреда 7777 рублей."
++        )
++        assert money == []
++
++
++class TestTotalCarriesKopecks:
++    """Итог резолюции переносит копейки в рубли.
++
++    20 921,53 + 10 460,76 = 41 382,29, а не 41 381,29: без переноса
++    итог расходился с суммой перечисленных пунктов на один рубль.
++    """
++
++    def test_total_with_kopecks_carried(self) -> None:
++        from app.drafting.operative import _sum_amounts
++
++        rubles, kopecks = _sum_amounts([(20921, 53), (10460, 76), (10000, 0)])
++        assert (rubles, kopecks) == (41382, 29)
++
++
++class TestCostsSynonyms:
++    def test_expenses_for_expertise_form(self) -> None:
++        from app.drafting.requirements import extract_fee_and_costs
++
++        pack = EvidencePack(case_number="T-REVIEW")
++        pack.items.append(
++            EvidenceItem(
++                category="claims",
++                text=(
++                    "Просит взыскать расходы на проведение экспертизы "
++                    "в сумме 3000 рублей."
++                ),
++                source_document="05_protocol.txt",
++                source_type="CLAIM",
++                order=1,
++            )
++        )
++        _fee, costs = extract_fee_and_costs(pack)
++        assert costs == 3000
++
++
+ class TestAmountSpelledOutInBrackets:
+     def test_sum_with_words_in_brackets(self) -> None:
+         # D5: «15 191 (Пятнадцать тысяч сто девяносто один) рубль
+diff --git a/docs/agent-summary.md b/docs/agent-summary.md
+index ba300bb..af3ff65 100644
+--- a/docs/agent-summary.md
++++ b/docs/agent-summary.md
+@@ -51,7 +51,7 @@ Push не выполнялся.
+ 
+ | Команда | Результат |
+ |---|---|
+-| `pytest -q -p no:warnings` | exit 0, **750 тестов** (финал с двумя раундами ревью) |
++| `pytest -q -p no:warnings` | exit 0, **758 тестов** (финал с тремя раундами ревью) |
+ | `ruff check app tests` | чисто |
+ | `mypy --strict app` | чисто, 66 файлов |
+ | `node --check` (demo.js, chat.js, app.js) | exit 0 |
+@@ -97,7 +97,16 @@ Push не выполнялся.
+    требования истца отличается по контексту перед глаголом. Также:
+    одинаковые суммы у разных оснований больше не схлопываются, в
+    заметке о конфликте есть копейки, заметка не дублируется.
+-   Тесты: `tests/test_review_findings.py`. Suite 750 тестов.
++   Тесты: `tests/test_review_findings.py`. Третий раунд ревью закрыл
++   ещё шесть находок: отсев «определения суда» больше не съедает
++   требование истца («истец считает необходимым взыскать…»), слова
++   суда из соседнего предложения не делают требованием истца следующее
++   окно, заметка о конфликте сумм показывает оба источника и
++   спрашивает осторожно («уточнение или разные требования»), итог
++   резолюции переносит копейки в рубли (было 41 381 руб. 29 коп. вместо
++   41 382 руб. 29 коп.), добавлена форма «расходы на проведение
++   экспертизы», таблица итогов Этапа 2 помечена как снимок.
++   Suite 758 тестов.
+    Осталось: real-10 — требование «1/3 часть от суммы» честно в
+    непознанных (пропорциональная доля); «стоимость сотового
+    телефона» (real-06) не распознаётся (якорь на «стоимость товара»);
+diff --git a/docs/end-to-end-evaluation.md b/docs/end-to-end-evaluation.md
+index 53db9f8..2d595ed 100644
+--- a/docs/end-to-end-evaluation.md
++++ b/docs/end-to-end-evaluation.md
+@@ -7,6 +7,12 @@
+ 
+ ## Результаты по делам (демо-набор, 10 дел)
+ 
++> Таблица — состояние на момент Этапа 2 (20.10.2026), на нём
++> обнаружен дефект F1. Текущие итоги — в разделах «Доработка F1» и
++> «Раунд независимого ревью» ниже: real-03 → 48 390, real-04 →
++> 29 692, real-05 → 41 381 (в рублях; с копейками 41 382,29),
++> real-06 → 25 890, real-08 → 10 400.
++
+ | Дело | Категория | Иск | Итог системы | Пошлина | Источников | Замечаний | Без источника | Пробелов |
+ |---|---|---|---|---|---|---|---|---|
+ | real-01 | прочие споры | 11 107 | 11 107 | 444 | 1 | 2 | 1 | 0 |
+@@ -192,6 +198,41 @@ real-04 в одной фразе стоят и неустойка 10 564,40, и
+ Итог после двух раундов ревью: 750 тестов, ruff и mypy чисто, все 10
+ дел перепогнаны.
+ 
++**Третий раунд ревью** (свежее окно, `НЕ ПРОШЁЛ` — шесть находок,
++все закрыты):
++
++1. *Отсев «определения суда» съедал требование истца (P2).* Маркеры
++   «считает необходимым», «необходимо взыскать» работали без судебного
++   субъекта, и требование истца («истец считает необходимым взыскать
++   …») исчезало молча. Контекст окна заканчивался на 200 знаках
++   назад, и «суд постановил» из соседнего предложения делало
++   следующее окно приговором. Теперь смотрится только последнее
++   предложение перед окном, а если в нём истец назван действующим
++   лицом («Истец считает, что необходимо взыскать …») — требование
++   остаётся требованием.
++2. *Заметка о конфликте сумм спрашивала не то (P2).* В real-01 по
++   основанию «задолженность по договору» стоят 11 107,84 (ЖКУ за один
++   период, иск) и 7 919,17 (ремонт за другой, протокол) — это разные
++   задолженности, а не уточнение одной, и вопрос «какая просительная»
++   был неверным. Теперь в заметке оба источника и осторожная
++   формулировка: «уточнение или разные требования, решает судья».
++3. *Итог резолюции терял перенос копеек в рубли (P2).* 10 000,00 +
++   20 921,53 + 10 460,76 печаталось как «41 381 руб. 29 коп.» вместо
++   «41 382 руб. 29 коп.» — итог расходился с перечисленными пунктами
++   на один рубль. Теперь копейки переносятся в рубли (`_sum_amounts`).
++4. *Синоним формы расходов (P3).* «расходы на проведение экспертизы»
++   не распознавалось (была только форма «затраты на …»).
++5. *Устаревшая таблица итогов (P3).* Таблица результатов Этапа 2
++   подавалась как текущая — теперь она помечена как снимок на
++   20.10.2026 со ссылкой на актуальные цифры.
++6. *Пробелы в тестах (P3).* Добавлены тесты: требование истца с
++   формулировкой «считает необходимым» не отсекается, слова суда из
++   соседнего предложения не «прилипают», заметка между документами
++   показывает оба источника, итог переносит копейки, синоним формы
++   расходов.
++
++Итог после трёх раундов ревью: 758 тестов, ruff и mypy чисто.
++
+ Что осталось: «стоимость сотового телефона» (real-06) не
+ распознаётся — якорь на «стоимость товара», а телефон — не товар по
+ формулировке; сокращение «руб.» с точкой разрывает связь «взыскать …
+-- 
+2.53.0.windows.2
+
