@@ -346,14 +346,25 @@ class OperativePart:
                 f"{REVIEW}: требования истца не установлены, "
                 "резолютивная часть не сформирована."
             )
+        # Преамбула «Руководствуясь ст. 198 ГПК РФ, суд решил:» стоит
+        # первым элементом items, но в тексте это вводная к пунктам, а не
+        # пункт 1: нумерация начинается с первого требования. Раньше
+        # преамбула печаталась дважды — отдельной строкой и пунктом.
+        preamble = ""
+        items = list(self.items)
+        if items and items[0].startswith("Руководствуясь"):
+            preamble = items[0]
+            items = items[1:]
         body = "\n".join(
             f"{index}. {item}"
-            for index, item in enumerate(self.items, start=1)
+            for index, item in enumerate(items, start=1)
         )
-        legal = f"Руководствуясь {self.legal_basis}, суд решил:"
+        legal = preamble or f"Руководствуясь {self.legal_basis}, суд решил:"
+        parts = [part for part in (legal, body) if part]
+        text = "\n".join(parts)
         if self.gaps:
-            return f"{legal}\n{body}\n\n{REVIEW}: " + "; ".join(self.gaps)
-        return f"{legal}\n{body}"
+            text += f"\n\n{REVIEW}: " + "; ".join(self.gaps)
+        return text
 
 
 def _amount(value: float, kopecks: int = 0) -> str:

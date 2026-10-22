@@ -45,6 +45,20 @@ class TestDefaultJudgmentItems:
         assert result.items[0].startswith("Руководствуясь")
         assert "ст. 198" in result.items[0]
 
+    def test_legal_basis_printed_once(self) -> None:
+        """Вводная формула печатается один раз.
+
+        Она стоит первым элементом items и выводится как вводная к
+        пунктам, а не отдельной строкой и пунктом: в каждой резолюции
+        преамбула печаталась дважды.
+        """
+        result = build_operative([claim()], fee_paid=5100,
+                                 procedure=Procedure.DEFAULT)
+        text = result.render()
+        assert text.count("Руководствуясь") == 1
+        assert text.startswith("Руководствуясь")
+        assert "\n1. " in text
+
     def test_procedure_item_second(self) -> None:
         """Порядок рассмотрения идёт после вводной формулы."""
         result = build_operative([claim()], fee_paid=5100,
