@@ -49,7 +49,7 @@ class TestShareClaim:
 
     def test_share_claim_extracted(self) -> None:
         claims = _money(self.SHARE)
-        assert "расходы в долевой части" in claims
+        assert "расходы в долевой части 1/3" in claims
 
     def test_share_claim_has_no_amount(self) -> None:
         """Сумма требования — доля, а не рубль: системы не считает её.
@@ -58,7 +58,7 @@ class TestShareClaim:
         сумма остаётся None, и в резолютивной части судья видит
         ТРЕБУЕТ ПРОВЕРКИ СПЕЦИАЛИСТОМ.
         """
-        claim = _money(self.SHARE)["расходы в долевой части"]
+        claim = _money(self.SHARE)["расходы в долевой части 1/3"]
         assert claim.amount is None
 
     def test_share_claim_renders_for_judge(self) -> None:
@@ -78,8 +78,22 @@ class TestShareClaim:
         from app.drafting.operative import build_operative
 
         text = build_operative(money).render()
-        assert "расходы в долевой части" in text
+        assert "расходы в долевой части 1/3" in text
         assert "ТРЕБУЕТ ПРОВЕРКИ СПЕЦИАЛИСТОМ" in text
+
+    def test_two_fractions_are_two_claims(self) -> None:
+        """Две доли в одном иске — два пункта, а не один.
+
+        Находка независимого ревью: ключ «расходы в долевой части» был
+        фиксированным, и «1/3 часть» + «1/2 часть» схлопывались в один
+        пункт — вторая доля из резолютивной части исчезала.
+        """
+        claims = _money(
+            "Просит взыскать 1/3 часть от суммы 55021 руб. 47 копеек, "
+            "а также 1/2 часть от суммы 12000 рублей."
+        )
+        assert "расходы в долевой части 1/3" in claims
+        assert "расходы в долевой части 1/2" in claims
 
 
 class TestUtilitiesVsRepair:

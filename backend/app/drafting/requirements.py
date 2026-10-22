@@ -121,6 +121,13 @@ def _find_amount_with_kopecks(text: str) -> tuple[int, int] | None:
         if whole is not None:
             return whole, int(with_kop.group(2))
 
+    # Сумма, записанная только копейками: real-01 суд взыскал ЖКУ
+    # «72 копейки», и без этой формы требование оставалось «в полном
+    # объёме» на 11 107,84 — ложь в ту же сторону, что и отказ.
+    kop_only = re.search(r"(?<![\d.,])(\d{1,2})\s*коп", text, re.I)
+    if kop_only:
+        return 0, int(kop_only.group(1))
+
     plain = _find_amount(text)
     return (plain, 0) if plain is not None else None
 
@@ -526,8 +533,15 @@ def extract_requirements(
             # части судья видит ТРЕБУЕТ ПРОВЕРКИ СПЕЦИАЛИСТОМ и сумму
             # подставляет сам. Вычислять долю из55 021,47 нельзя:
             # система не считает чисел, которых нет в материалах.
-            if _SHARE_FRACTION.search(requirement_text):
-                share_basis = "расходы в долевой части"
+            shares_added = False
+            for fraction in _SHARE_FRACTION.finditer(requirement_text):
+                # Доля входит в основание: два долевых требования
+                # («1/3 часть» и «1/2 часть») — два пункта, а не один
+                # с потерей второй доли (находка независимого ревью).
+                # Обе доли ищутся по всему окну: в перечислении «просит
+                # взыскать 1/3 часть …, а также 1/2 часть …» они стоят
+                # в одном окне, и первая перекрывала вторую.
+                share_basis = f"расходы в долевой части {fraction.group(1)}"
                 if share_basis not in money:
                     money[share_basis] = MoneyClaim(
                         amount=None,
@@ -536,6 +550,8 @@ def extract_requirements(
                         source=source,
                         outcome=Outcome.SATISFIED,
                     )
+                shares_added = True
+            if shares_added:
                 continue
             # Требование есть, а основание определить не удалось.
             # Оно показывается судье, а не выбрасывается: молча
@@ -660,7 +676,8 @@ _REFERENCE_DOCUMENT = re.compile(r"court_decision_reference", re.I)
 #: Требование в долевой форме: «взыскать 1/3 часть от суммы ...»,
 #: «взыскивает 1/2 части». Сумма требования здесь — не рубль, а доля,
 #: и рублёвого числа требования в материалах может не быть.
-_SHARE_FRACTION = re.compile(r"\b\d+\s*/\s*\d+\s+част", re.I)
+#: В группу 1 захватывается сама доля: она входит в основание пункта.
+_SHARE_FRACTION = re.compile(r"(\d+\s*/\s*\d+)\s+част", re.I)
 
 #: Заголовок мотивировочной части — «УСТАНОВИЛ:» отдельной строкой или
 #: шапка «ОБСТОЯТЕЛЬСТВА, УСТАНОВЛЕННЫЕ СУДОМ». Без требования заголовка
@@ -688,18 +705,24 @@ _PARTIAL_SIGNAL = re.compile(
 #: подтверждать исход требования о неустойке.
 _SANCTION_PERCENT = re.compile(r"штраф\w*[^.]{0,40}\d+\s*%", re.I)
 
-
-def _anchor_basis(fragment: str) -> str | None:
-    """Основание требования внутри отдельного предложения.
-
-    Используются якоря (CLAIM_BASIS_ANCHORS), а не полные шаблоны
-    требований: в установительной части суд пишет не «истец просит
-    взыскать», а «суд взыскивает» — глагол требования там отсутствует.
-    """
-    for pattern, basis in CLAIM_BASIS_ANCHORS:
-        if pattern.search(fragment):
-            return basis
-    return None
+#: Отказная формулировка по конкретному основанию. Фрагмент с ней не
+#: подтверждает исход: раньше «Требование истца о взыскании неустойки
+#: в размере 10 000 руб. удовлетворению не подлежит» содержал и
+#: основание, и сумму, и считался подтверждением — проект писал «в
+#: полном объёме» там, где суд отказал (находка независимого ревью).
+#: Общая «В остальной части иска отказать» сюда не попадает: это
+#: сигнал частичности, а не отказ по конкретному основанию.
+_REFUSAL_SIGNAL = re.compile(
+    r"удовлетворени\w*\s+не\s+подлежит"
+    r"|не\s+удовлетворять"
+    r"|в\s+удовлетворени\w+[^.]{0,120}?отказать"
+    r"|отказать\s+в\s+удовлетворени"
+    # «Оснований для взыскания ... не имеется» — тоже отказ, форма из
+    # real-01 (суд отказал по ремонту 7 919,17).
+    r"|основани\w*[^.]{0,120}?не\s+имеется"
+    r"|не\s+имеется\s+основани",
+    re.I,
+)
 
 
 def _findings_streams(pack: EvidencePack) -> list[tuple[str, str]]:
@@ -770,8 +793,12 @@ def resolve_outcomes(
     findings_source = findings[0][0]
     partial_signal = bool(_PARTIAL_SIGNAL.search(findings_text))
 
-    # Суммы, которые суд установил по каждому основанию.
+    # Суммы, которые суд установил по каждому основанию, и основания,
+    # по которым суд прямо отказал. Фильтры одинаковые для обеих
+    # таблиц: штраф ст. 13 ЗПП и отказные конструкции не подтверждают
+    # исход требования, а отказная — прямо его отрицает.
     granted: dict[str, list[tuple[int, int]]] = {}
+    refused: set[str] = set()
     for fragment in _fragments(findings_text):
         if _SANCTION_PERCENT.search(fragment):
             continue
@@ -786,7 +813,12 @@ def resolve_outcomes(
             found = _find_amount_with_kopecks(fragment[match.end() :])
             if found is None:
                 found = _find_amount_with_kopecks(fragment)
-            if found is not None:
+            if _REFUSAL_SIGNAL.search(fragment):
+                # «Требование о взыскании неустойки 10 000 руб.
+                # удовлетворению не подлежит» — суд отказал именно в
+                # этом требовании: основание и сумма совпали.
+                refused.add(basis)
+            elif found is not None:
                 granted.setdefault(basis, []).append(found)
             break
 
@@ -807,6 +839,21 @@ def resolve_outcomes(
             resolved.append(claim)
             continue
 
+        if claim.basis in refused:
+            # Суд отказал в этом требовании прямо (см. _REFUSAL_SIGNAL).
+            # Исход берётся из материалов, а не из пожелания истца.
+            resolved.append(
+                replace(
+                    claim,
+                    outcome=Outcome.DENIED,
+                    grounds=(
+                        "материалы указывают на отказ в удовлетворении "
+                        f"(см. {findings_source})"
+                    ),
+                )
+            )
+            continue
+
         smaller = [key for key in amounts if key < claim_key]
         if smaller:
             granted_whole, granted_kop = max(smaller)
@@ -823,9 +870,24 @@ def resolve_outcomes(
 
         if amounts:
             # Сумма суда больше требуемой — такого быть не должно.
-            # Требование остаётся без исхода, а расхождение видно
-            # судье по номерам в установительной части.
-            resolved.append(claim)
+            # Исход «в полном объёме» здесь лгал бы: суд взыскал не то,
+            # что просили. Требование становится частичным с суммой
+            # суда — обе цифры видны в пункте, расхождение сверяет
+            # судья (находка независимого ревью: раньше оставался
+            # дефолт SATISFIED без единой пометки).
+            court_whole, court_kop = max(amounts)
+            resolved.append(
+                replace(
+                    claim,
+                    outcome=Outcome.PARTIAL,
+                    granted_amount=float(court_whole),
+                    granted_kopecks=court_kop,
+                    grounds=(
+                        "сумма суда больше заявленной "
+                        f"(см. {findings_source}) — сверьте"
+                    ),
+                )
+            )
             continue
 
         if partial_signal:
