@@ -446,16 +446,16 @@ def extract_requirements(
             elif (
                 existing_clause.amount != clause_whole
                 or existing_clause.kopecks != clause_kopecks
-            ) and existing_clause.source == source:
-                # Одно основание — две разные суммы (в real-04 протокол
-                # содержит и первоначальную неустойку, и уточнённую).
-                # Решение — за судьёй, но молчать нельзя.
+            ):
+                # Одно основание — две разные суммы. Это либо
+                # уточнённое требование (real-01: иск 11 107, протокол
+                # 7 919), либо два пункта одного перечисления (real-04:
+                # неустойка 2 202,90 и уточнённая 10 564,40). Решение —
+                # за судьёй, но молчать нельзя.
                 #
-                # Сравниваются суммы из одного документа: расхождение
-                # между иском и решением суда — это не конфликт
-                # требований, а вывод исхода (суд удовлетворил частично
-                # или отказал), и он остаётся за судьёй и без этой
-                # заметки.
+                # Определения суда в требования не попадают (см.
+                # _is_court_determination), поэтому расхождение между
+                # иском и решением суда сюда не доходит.
                 _add_note(
                     unrecognised,
                     _conflict_note(
@@ -563,7 +563,6 @@ def extract_requirements(
             existing.amount is not None
             and whole is not None
             and (existing.amount != whole or existing.kopecks != kopecks)
-            and existing.source == source
         ):
             # Одно основание — две разные суммы (см. выше).
             _add_note(
