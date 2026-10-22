@@ -132,6 +132,17 @@ def audit_case(case_dir: Path) -> dict[str, Any]:
                     int(claim.get("granted_kopecks") or 0),
                 )
             )
+    # Встречный иск: резолютивная включает удовлетворённый встречный
+    # в итог «а всего» (operative.py), поэтому и сверка его считает —
+    # иначе появление такого дела дало бы ложный дефект итога.
+    for counter in rules.get("counter_claims") or []:
+        if counter.get("outcome", "satisfied") == "satisfied":
+            counted.append(
+                (
+                    float(counter.get("amount") or 0),
+                    int(counter.get("kopecks") or 0),
+                )
+            )
     expected_kopecks = sum(kop for _, kop in counted)
     expected_total = (
         sum(amount for amount, _ in counted)

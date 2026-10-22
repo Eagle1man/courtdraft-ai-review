@@ -208,3 +208,189 @@ class TestOutcomeFromFindings:
         # что просил истец, пока нет настоящей установительной части.
         for basis, claim in claims.items():
             assert claim.outcome is Outcome.SATISFIED, basis
+
+
+class TestRefusalAndAnomalies:
+    """Находки независимого ревью (снимок 49 коммитов).
+
+    1. Отказная формулировка с основанием и суммой не подтверждает
+       исход — она его отрицает. Раньше «Требование о взыскании
+       неустойки в размере 6 890 руб. удовлетворению не подлежит»
+       содержала и основание, и сумму, и считалась подтверждением:
+       проект писал «в полном объёме» там, где суд отказал.
+    2. Сумма суда больше заявленной — не «в полном объёме», а видимое
+       расхождение: раньше оставался дефолт SATISFIED без пометки.
+    """
+
+    REFUSAL_FINDINGS = (
+        "УСТАНОВИЛ:\n"
+        "Суд, заслушав объяснения истца, проверив материалы дела, "
+        "считает иск подлежащим удовлетворению частично.\n"
+        "Требование истца о взыскании неустойки в размере 6890 рублей "
+        "удовлетворению не подлежит.\n"
+        "Удовлетворению не подлежит и требование о компенсации "
+        "морального вреда в размере 7000 рублей.\n"
+    )
+
+    def _refusal_pack(self) -> EvidencePack:
+        return EvidencePack(
+            items=[
+                EvidenceItem(
+                    category="claims",
+                    text=CLAIM,
+                    source_document="01_claim.txt",
+                    source_type="иск",
+                    amounts=["6890", "7000"],
+                    order=1,
+                ),
+                EvidenceItem(
+                    category="protocol_findings",
+                    text=self.REFUSAL_FINDINGS,
+                    source_document="06_court_findings.txt",
+                    source_type="мотивировочная часть",
+                    amounts=["6890", "7000"],
+                    order=1,
+                ),
+            ],
+            amounts=["6890", "7000"],
+        )
+
+    def test_refusal_is_denied(self) -> None:
+        """«Удовлетворению не подлежит» — отказ, а не подтверждение."""
+        claims = _money_by_basis(self._refusal_pack())
+        claim = claims["неустойка и санкции"]
+        assert claim.outcome is Outcome.DENIED
+        assert claim.granted_amount is None
+
+    def test_refusal_inverted_word_order(self) -> None:
+        """«Удовлетворению не подлежит и требование о ...» — тоже отказ."""
+        claims = _money_by_basis(self._refusal_pack())
+        assert (
+            claims["компенсация морального вреда"].outcome is Outcome.DENIED
+        )
+
+    def test_unmatched_claims_stay_partial_without_sum(self) -> None:
+        """Требования без суммы в установительной части — частичные.
+
+        Частичный сигнал общий («удовлетворению частично»), суммы по
+        основанию нет — исход неизвестен, но «в полном объёме» не
+        печатается.
+        """
+        claims = _money_by_basis(self._refusal_pack())
+        assert claims["убытки"].outcome is Outcome.PARTIAL
+        assert claims["убытки"].granted_amount is None
+
+    def test_refusal_no_grounds_is_denied(self) -> None:
+        """«Оснований для взыскания … не имеется» — отказ.
+
+        Форма из real-01: суд отказал по ремонту 7 919,17 именно так.
+        """
+        pack = EvidencePack(
+            items=[
+                EvidenceItem(
+                    category="claims",
+                    text="Прошу взыскать задолженность за ремонт и "
+                    "содержание жилья в размере 7919 руб. 17 копеек.",
+                    source_document="01_claim.txt",
+                    source_type="иск",
+                    amounts=["7919"],
+                    order=1,
+                ),
+                EvidenceItem(
+                    category="protocol_findings",
+                    text=(
+                        "УСТАНОВИЛ:\n"
+                        "Суд, заслушав объяснения истца, проверив "
+                        "материалы дела, установил.\n"
+                        "Оснований для взыскания с ответчика "
+                        "задолженности за ремонт и содержание жилья "
+                        "в размере 7919 рублей 17 копеек не имеется."
+                    ),
+                    source_document="06_court_findings.txt",
+                    source_type="мотивировочная часть",
+                    amounts=["7919"],
+                    order=1,
+                ),
+            ],
+            amounts=["7919"],
+        )
+        claim = _money_by_basis(pack)["задолженность за ремонт и содержание жилья"]
+        assert claim.outcome is Outcome.DENIED
+
+    def test_kopecks_only_sum_is_read(self) -> None:
+        """Сумма-копейки: real-01 суд взыскал ЖКУ «72 копейки».
+
+        Без этой формы требование оставалось «в полном объёме» на
+        11 107,84 руб. — ложь в ту же сторону, что и отказ.
+        """
+        pack = EvidencePack(
+            items=[
+                EvidenceItem(
+                    category="claims",
+                    text="Прошу взыскать задолженность за жилищно-"
+                    "коммунальные услуги в размере 11107 руб. 84 копейки.",
+                    source_document="01_claim.txt",
+                    source_type="иск",
+                    amounts=["11107"],
+                    order=1,
+                ),
+                EvidenceItem(
+                    category="protocol_findings",
+                    text=(
+                        "УСТАНОВИЛ:\n"
+                        "Суд, заслушав объяснения истца, проверив "
+                        "материалы дела, установил.\n"
+                        "Взысканию с ответчика подлежит задолженность "
+                        "по оплате жилья и коммунальных услуг в размере "
+                        "72 копейки."
+                    ),
+                    source_document="06_court_findings.txt",
+                    source_type="мотивировочная часть",
+                    amounts=["72"],
+                    order=1,
+                ),
+            ],
+            amounts=["11107"],
+        )
+        claim = _money_by_basis(pack)["задолженность за жилищно-коммунальные услуги"]
+        assert claim.outcome is Outcome.PARTIAL
+        assert claim.granted_amount == 0
+        assert claim.granted_kopecks == 72
+
+    def test_court_sum_bigger_than_claim_is_visible(self) -> None:
+        """Сумма суда больше заявленной — расхождение видно судье.
+
+        Дефект ревью: комментарий обещал «требование остаётся без
+        исхода», а код оставлял дефолт SATISFIED — резолютивная писала
+        «в полном объёме» там, где суд взыскал не то, что просили.
+        """
+        pack = EvidencePack(
+            items=[
+                EvidenceItem(
+                    category="claims",
+                    text="Прошу взыскать убытки в размере 3000 руб.",
+                    source_document="01_claim.txt",
+                    source_type="иск",
+                    amounts=["3000"],
+                    order=1,
+                ),
+                EvidenceItem(
+                    category="protocol_findings",
+                    text=(
+                        "УСТАНОВИЛ:\n"
+                        "Суд, заслушав объяснения истца, проверив "
+                        "материалы дела, взыскивает с ответчика убытки "
+                        "в размере 5000 рублей."
+                    ),
+                    source_document="06_court_findings.txt",
+                    source_type="мотивировочная часть",
+                    amounts=["5000"],
+                    order=1,
+                ),
+            ],
+            amounts=["3000"],
+        )
+        claim = _money_by_basis(pack)["убытки"]
+        assert claim.outcome is Outcome.PARTIAL
+        assert claim.granted_amount == 5000
+        assert "сумма суда больше заявленной" in (claim.grounds or "")

@@ -1,0 +1,725 @@
+From 62b94f532f88ebda2a6b72805042a6f9b1fe4d86 Mon Sep 17 00:00:00 2001
+From: Eagle1man <orel198611@gmail.com>
+Date: Thu, 22 Oct 2026 20:47:09 +0300
+Subject: [PATCH] =?UTF-8?q?=D0=A0=D0=B0=D1=83=D0=BD=D0=B4=20=D1=80=D0=B5?=
+ =?UTF-8?q?=D0=B2=D1=8C=D1=8E:=20=D0=BE=D1=82=D0=BA=D0=B0=D0=B7=D0=BD?=
+ =?UTF-8?q?=D1=8B=D0=B5=20=D1=84=D0=BE=D1=80=D0=BC=D1=83=D0=BB=D0=B8=D1=80?=
+ =?UTF-8?q?=D0=BE=D0=B2=D0=BA=D0=B8,=20=D1=81=D1=83=D0=BC=D0=BC=D0=B0-?=
+ =?UTF-8?q?=D0=BA=D0=BE=D0=BF=D0=B5=D0=B9=D0=BA=D0=B8,=20=D0=B4=D0=B2?=
+ =?UTF-8?q?=D0=B5=20=D0=B4=D0=BE=D0=BB=D0=B8,=20rules=20=D0=B4=D0=BB=D1=8F?=
+ =?UTF-8?q?=20=D0=B4=D0=B5=D0=BC=D0=BE-=D1=80=D0=B5=D0=B7=D0=BE=D0=BB?=
+ =?UTF-8?q?=D1=8E=D1=82=D0=B8=D0=B2=D0=BD=D0=BE=D0=B9?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+---
+ backend/app/drafting/requirements.py      | 102 +++++++++---
+ backend/tests/test_outcomes.py            | 186 ++++++++++++++++++++++
+ backend/tests/test_share_and_utilities.py |  20 ++-
+ scripts/build_real_site.py                |  14 ++
+ scripts/e2e_audit.py                      |  11 ++
+ site/demo/cases.json                      | 113 +++----------
+ 6 files changed, 334 insertions(+), 112 deletions(-)
+
+diff --git a/backend/app/drafting/requirements.py b/backend/app/drafting/requirements.py
+index e573b56..1412139 100644
+--- a/backend/app/drafting/requirements.py
++++ b/backend/app/drafting/requirements.py
+@@ -121,6 +121,13 @@ def _find_amount_with_kopecks(text: str) -> tuple[int, int] | None:
+         if whole is not None:
+             return whole, int(with_kop.group(2))
+ 
++    # Сумма, записанная только копейками: real-01 суд взыскал ЖКУ
++    # «72 копейки», и без этой формы требование оставалось «в полном
++    # объёме» на 11 107,84 — ложь в ту же сторону, что и отказ.
++    kop_only = re.search(r"(?<![\d.,])(\d{1,2})\s*коп", text, re.I)
++    if kop_only:
++        return 0, int(kop_only.group(1))
++
+     plain = _find_amount(text)
+     return (plain, 0) if plain is not None else None
+ 
+@@ -526,8 +533,15 @@ def extract_requirements(
+             # части судья видит ТРЕБУЕТ ПРОВЕРКИ СПЕЦИАЛИСТОМ и сумму
+             # подставляет сам. Вычислять долю из55 021,47 нельзя:
+             # система не считает чисел, которых нет в материалах.
+-            if _SHARE_FRACTION.search(requirement_text):
+-                share_basis = "расходы в долевой части"
++            shares_added = False
++            for fraction in _SHARE_FRACTION.finditer(requirement_text):
++                # Доля входит в основание: два долевых требования
++                # («1/3 часть» и «1/2 часть») — два пункта, а не один
++                # с потерей второй доли (находка независимого ревью).
++                # Обе доли ищутся по всему окну: в перечислении «просит
++                # взыскать 1/3 часть …, а также 1/2 часть …» они стоят
++                # в одном окне, и первая перекрывала вторую.
++                share_basis = f"расходы в долевой части {fraction.group(1)}"
+                 if share_basis not in money:
+                     money[share_basis] = MoneyClaim(
+                         amount=None,
+@@ -536,6 +550,8 @@ def extract_requirements(
+                         source=source,
+                         outcome=Outcome.SATISFIED,
+                     )
++                shares_added = True
++            if shares_added:
+                 continue
+             # Требование есть, а основание определить не удалось.
+             # Оно показывается судье, а не выбрасывается: молча
+@@ -660,7 +676,8 @@ _REFERENCE_DOCUMENT = re.compile(r"court_decision_reference", re.I)
+ #: Требование в долевой форме: «взыскать 1/3 часть от суммы ...»,
+ #: «взыскивает 1/2 части». Сумма требования здесь — не рубль, а доля,
+ #: и рублёвого числа требования в материалах может не быть.
+-_SHARE_FRACTION = re.compile(r"\b\d+\s*/\s*\d+\s+част", re.I)
++#: В группу 1 захватывается сама доля: она входит в основание пункта.
++_SHARE_FRACTION = re.compile(r"(\d+\s*/\s*\d+)\s+част", re.I)
+ 
+ #: Заголовок мотивировочной части — «УСТАНОВИЛ:» отдельной строкой или
+ #: шапка «ОБСТОЯТЕЛЬСТВА, УСТАНОВЛЕННЫЕ СУДОМ». Без требования заголовка
+@@ -688,18 +705,24 @@ _PARTIAL_SIGNAL = re.compile(
+ #: подтверждать исход требования о неустойке.
+ _SANCTION_PERCENT = re.compile(r"штраф\w*[^.]{0,40}\d+\s*%", re.I)
+ 
+-
+-def _anchor_basis(fragment: str) -> str | None:
+-    """Основание требования внутри отдельного предложения.
+-
+-    Используются якоря (CLAIM_BASIS_ANCHORS), а не полные шаблоны
+-    требований: в установительной части суд пишет не «истец просит
+-    взыскать», а «суд взыскивает» — глагол требования там отсутствует.
+-    """
+-    for pattern, basis in CLAIM_BASIS_ANCHORS:
+-        if pattern.search(fragment):
+-            return basis
+-    return None
++#: Отказная формулировка по конкретному основанию. Фрагмент с ней не
++#: подтверждает исход: раньше «Требование истца о взыскании неустойки
++#: в размере 10 000 руб. удовлетворению не подлежит» содержал и
++#: основание, и сумму, и считался подтверждением — проект писал «в
++#: полном объёме» там, где суд отказал (находка независимого ревью).
++#: Общая «В остальной части иска отказать» сюда не попадает: это
++#: сигнал частичности, а не отказ по конкретному основанию.
++_REFUSAL_SIGNAL = re.compile(
++    r"удовлетворени\w*\s+не\s+подлежит"
++    r"|не\s+удовлетворять"
++    r"|в\s+удовлетворени\w+[^.]{0,120}?отказать"
++    r"|отказать\s+в\s+удовлетворени"
++    # «Оснований для взыскания ... не имеется» — тоже отказ, форма из
++    # real-01 (суд отказал по ремонту 7 919,17).
++    r"|основани\w*[^.]{0,120}?не\s+имеется"
++    r"|не\s+имеется\s+основани",
++    re.I,
++)
+ 
+ 
+ def _findings_streams(pack: EvidencePack) -> list[tuple[str, str]]:
+@@ -770,8 +793,12 @@ def resolve_outcomes(
+     findings_source = findings[0][0]
+     partial_signal = bool(_PARTIAL_SIGNAL.search(findings_text))
+ 
+-    # Суммы, которые суд установил по каждому основанию.
++    # Суммы, которые суд установил по каждому основанию, и основания,
++    # по которым суд прямо отказал. Фильтры одинаковые для обеих
++    # таблиц: штраф ст. 13 ЗПП и отказные конструкции не подтверждают
++    # исход требования, а отказная — прямо его отрицает.
+     granted: dict[str, list[tuple[int, int]]] = {}
++    refused: set[str] = set()
+     for fragment in _fragments(findings_text):
+         if _SANCTION_PERCENT.search(fragment):
+             continue
+@@ -786,7 +813,12 @@ def resolve_outcomes(
+             found = _find_amount_with_kopecks(fragment[match.end() :])
+             if found is None:
+                 found = _find_amount_with_kopecks(fragment)
+-            if found is not None:
++            if _REFUSAL_SIGNAL.search(fragment):
++                # «Требование о взыскании неустойки 10 000 руб.
++                # удовлетворению не подлежит» — суд отказал именно в
++                # этом требовании: основание и сумма совпали.
++                refused.add(basis)
++            elif found is not None:
+                 granted.setdefault(basis, []).append(found)
+             break
+ 
+@@ -807,6 +839,21 @@ def resolve_outcomes(
+             resolved.append(claim)
+             continue
+ 
++        if claim.basis in refused:
++            # Суд отказал в этом требовании прямо (см. _REFUSAL_SIGNAL).
++            # Исход берётся из материалов, а не из пожелания истца.
++            resolved.append(
++                replace(
++                    claim,
++                    outcome=Outcome.DENIED,
++                    grounds=(
++                        "материалы указывают на отказ в удовлетворении "
++                        f"(см. {findings_source})"
++                    ),
++                )
++            )
++            continue
++
+         smaller = [key for key in amounts if key < claim_key]
+         if smaller:
+             granted_whole, granted_kop = max(smaller)
+@@ -823,9 +870,24 @@ def resolve_outcomes(
+ 
+         if amounts:
+             # Сумма суда больше требуемой — такого быть не должно.
+-            # Требование остаётся без исхода, а расхождение видно
+-            # судье по номерам в установительной части.
+-            resolved.append(claim)
++            # Исход «в полном объёме» здесь лгал бы: суд взыскал не то,
++            # что просили. Требование становится частичным с суммой
++            # суда — обе цифры видны в пункте, расхождение сверяет
++            # судья (находка независимого ревью: раньше оставался
++            # дефолт SATISFIED без единой пометки).
++            court_whole, court_kop = max(amounts)
++            resolved.append(
++                replace(
++                    claim,
++                    outcome=Outcome.PARTIAL,
++                    granted_amount=float(court_whole),
++                    granted_kopecks=court_kop,
++                    grounds=(
++                        "сумма суда больше заявленной "
++                        f"(см. {findings_source}) — сверьте"
++                    ),
++                )
++            )
+             continue
+ 
+         if partial_signal:
+diff --git a/backend/tests/test_outcomes.py b/backend/tests/test_outcomes.py
+index f38ecbe..ee216af 100644
+--- a/backend/tests/test_outcomes.py
++++ b/backend/tests/test_outcomes.py
+@@ -208,3 +208,189 @@ class TestOutcomeFromFindings:
+         # что просил истец, пока нет настоящей установительной части.
+         for basis, claim in claims.items():
+             assert claim.outcome is Outcome.SATISFIED, basis
++
++
++class TestRefusalAndAnomalies:
++    """Находки независимого ревью (снимок 49 коммитов).
++
++    1. Отказная формулировка с основанием и суммой не подтверждает
++       исход — она его отрицает. Раньше «Требование о взыскании
++       неустойки в размере 6 890 руб. удовлетворению не подлежит»
++       содержала и основание, и сумму, и считалась подтверждением:
++       проект писал «в полном объёме» там, где суд отказал.
++    2. Сумма суда больше заявленной — не «в полном объёме», а видимое
++       расхождение: раньше оставался дефолт SATISFIED без пометки.
++    """
++
++    REFUSAL_FINDINGS = (
++        "УСТАНОВИЛ:\n"
++        "Суд, заслушав объяснения истца, проверив материалы дела, "
++        "считает иск подлежащим удовлетворению частично.\n"
++        "Требование истца о взыскании неустойки в размере 6890 рублей "
++        "удовлетворению не подлежит.\n"
++        "Удовлетворению не подлежит и требование о компенсации "
++        "морального вреда в размере 7000 рублей.\n"
++    )
++
++    def _refusal_pack(self) -> EvidencePack:
++        return EvidencePack(
++            items=[
++                EvidenceItem(
++                    category="claims",
++                    text=CLAIM,
++                    source_document="01_claim.txt",
++                    source_type="иск",
++                    amounts=["6890", "7000"],
++                    order=1,
++                ),
++                EvidenceItem(
++                    category="protocol_findings",
++                    text=self.REFUSAL_FINDINGS,
++                    source_document="06_court_findings.txt",
++                    source_type="мотивировочная часть",
++                    amounts=["6890", "7000"],
++                    order=1,
++                ),
++            ],
++            amounts=["6890", "7000"],
++        )
++
++    def test_refusal_is_denied(self) -> None:
++        """«Удовлетворению не подлежит» — отказ, а не подтверждение."""
++        claims = _money_by_basis(self._refusal_pack())
++        claim = claims["неустойка и санкции"]
++        assert claim.outcome is Outcome.DENIED
++        assert claim.granted_amount is None
++
++    def test_refusal_inverted_word_order(self) -> None:
++        """«Удовлетворению не подлежит и требование о ...» — тоже отказ."""
++        claims = _money_by_basis(self._refusal_pack())
++        assert (
++            claims["компенсация морального вреда"].outcome is Outcome.DENIED
++        )
++
++    def test_unmatched_claims_stay_partial_without_sum(self) -> None:
++        """Требования без суммы в установительной части — частичные.
++
++        Частичный сигнал общий («удовлетворению частично»), суммы по
++        основанию нет — исход неизвестен, но «в полном объёме» не
++        печатается.
++        """
++        claims = _money_by_basis(self._refusal_pack())
++        assert claims["убытки"].outcome is Outcome.PARTIAL
++        assert claims["убытки"].granted_amount is None
++
++    def test_refusal_no_grounds_is_denied(self) -> None:
++        """«Оснований для взыскания … не имеется» — отказ.
++
++        Форма из real-01: суд отказал по ремонту 7 919,17 именно так.
++        """
++        pack = EvidencePack(
++            items=[
++                EvidenceItem(
++                    category="claims",
++                    text="Прошу взыскать задолженность за ремонт и "
++                    "содержание жилья в размере 7919 руб. 17 копеек.",
++                    source_document="01_claim.txt",
++                    source_type="иск",
++                    amounts=["7919"],
++                    order=1,
++                ),
++                EvidenceItem(
++                    category="protocol_findings",
++                    text=(
++                        "УСТАНОВИЛ:\n"
++                        "Суд, заслушав объяснения истца, проверив "
++                        "материалы дела, установил.\n"
++                        "Оснований для взыскания с ответчика "
++                        "задолженности за ремонт и содержание жилья "
++                        "в размере 7919 рублей 17 копеек не имеется."
++                    ),
++                    source_document="06_court_findings.txt",
++                    source_type="мотивировочная часть",
++                    amounts=["7919"],
++                    order=1,
++                ),
++            ],
++            amounts=["7919"],
++        )
++        claim = _money_by_basis(pack)["задолженность за ремонт и содержание жилья"]
++        assert claim.outcome is Outcome.DENIED
++
++    def test_kopecks_only_sum_is_read(self) -> None:
++        """Сумма-копейки: real-01 суд взыскал ЖКУ «72 копейки».
++
++        Без этой формы требование оставалось «в полном объёме» на
++        11 107,84 руб. — ложь в ту же сторону, что и отказ.
++        """
++        pack = EvidencePack(
++            items=[
++                EvidenceItem(
++                    category="claims",
++                    text="Прошу взыскать задолженность за жилищно-"
++                    "коммунальные услуги в размере 11107 руб. 84 копейки.",
++                    source_document="01_claim.txt",
++                    source_type="иск",
++                    amounts=["11107"],
++                    order=1,
++                ),
++                EvidenceItem(
++                    category="protocol_findings",
++                    text=(
++                        "УСТАНОВИЛ:\n"
++                        "Суд, заслушав объяснения истца, проверив "
++                        "материалы дела, установил.\n"
++                        "Взысканию с ответчика подлежит задолженность "
++                        "по оплате жилья и коммунальных услуг в размере "
++                        "72 копейки."
++                    ),
++                    source_document="06_court_findings.txt",
++                    source_type="мотивировочная часть",
++                    amounts=["72"],
++                    order=1,
++                ),
++            ],
++            amounts=["11107"],
++        )
++        claim = _money_by_basis(pack)["задолженность за жилищно-коммунальные услуги"]
++        assert claim.outcome is Outcome.PARTIAL
++        assert claim.granted_amount == 0
++        assert claim.granted_kopecks == 72
++
++    def test_court_sum_bigger_than_claim_is_visible(self) -> None:
++        """Сумма суда больше заявленной — расхождение видно судье.
++
++        Дефект ревью: комментарий обещал «требование остаётся без
++        исхода», а код оставлял дефолт SATISFIED — резолютивная писала
++        «в полном объёме» там, где суд взыскал не то, что просили.
++        """
++        pack = EvidencePack(
++            items=[
++                EvidenceItem(
++                    category="claims",
++                    text="Прошу взыскать убытки в размере 3000 руб.",
++                    source_document="01_claim.txt",
++                    source_type="иск",
++                    amounts=["3000"],
++                    order=1,
++                ),
++                EvidenceItem(
++                    category="protocol_findings",
++                    text=(
++                        "УСТАНОВИЛ:\n"
++                        "Суд, заслушав объяснения истца, проверив "
++                        "материалы дела, взыскивает с ответчика убытки "
++                        "в размере 5000 рублей."
++                    ),
++                    source_document="06_court_findings.txt",
++                    source_type="мотивировочная часть",
++                    amounts=["5000"],
++                    order=1,
++                ),
++            ],
++            amounts=["3000"],
++        )
++        claim = _money_by_basis(pack)["убытки"]
++        assert claim.outcome is Outcome.PARTIAL
++        assert claim.granted_amount == 5000
++        assert "сумма суда больше заявленной" in (claim.grounds or "")
+diff --git a/backend/tests/test_share_and_utilities.py b/backend/tests/test_share_and_utilities.py
+index fa95446..f03cdf0 100644
+--- a/backend/tests/test_share_and_utilities.py
++++ b/backend/tests/test_share_and_utilities.py
+@@ -49,7 +49,7 @@ class TestShareClaim:
+ 
+     def test_share_claim_extracted(self) -> None:
+         claims = _money(self.SHARE)
+-        assert "расходы в долевой части" in claims
++        assert "расходы в долевой части 1/3" in claims
+ 
+     def test_share_claim_has_no_amount(self) -> None:
+         """Сумма требования — доля, а не рубль: системы не считает её.
+@@ -58,7 +58,7 @@ class TestShareClaim:
+         сумма остаётся None, и в резолютивной части судья видит
+         ТРЕБУЕТ ПРОВЕРКИ СПЕЦИАЛИСТОМ.
+         """
+-        claim = _money(self.SHARE)["расходы в долевой части"]
++        claim = _money(self.SHARE)["расходы в долевой части 1/3"]
+         assert claim.amount is None
+ 
+     def test_share_claim_renders_for_judge(self) -> None:
+@@ -78,9 +78,23 @@ class TestShareClaim:
+         from app.drafting.operative import build_operative
+ 
+         text = build_operative(money).render()
+-        assert "расходы в долевой части" in text
++        assert "расходы в долевой части 1/3" in text
+         assert "ТРЕБУЕТ ПРОВЕРКИ СПЕЦИАЛИСТОМ" in text
+ 
++    def test_two_fractions_are_two_claims(self) -> None:
++        """Две доли в одном иске — два пункта, а не один.
++
++        Находка независимого ревью: ключ «расходы в долевой части» был
++        фиксированным, и «1/3 часть» + «1/2 часть» схлопывались в один
++        пункт — вторая доля из резолютивной части исчезала.
++        """
++        claims = _money(
++            "Просит взыскать 1/3 часть от суммы 55021 руб. 47 копеек, "
++            "а также 1/2 часть от суммы 12000 рублей."
++        )
++        assert "расходы в долевой части 1/3" in claims
++        assert "расходы в долевой части 1/2" in claims
++
+ 
+ class TestUtilitiesVsRepair:
+     """ЖКУ и ремонт — разные требования, а не одна задолженность."""
+diff --git a/scripts/build_real_site.py b/scripts/build_real_site.py
+index c6def93..ab3b377 100644
+--- a/scripts/build_real_site.py
++++ b/scripts/build_real_site.py
+@@ -161,6 +161,14 @@ async def process(case_dir: Path) -> dict[str, Any]:
+         text=operative.render(),
+         is_mock=False,
+         citations=sources,
++        # Резолютивная собрана правилами, а не моделью: без пометки
++        # проверка относится к ней как к тексту модели и вешает
++        # ложные CRITICAL «число … отсутствует в материалах» на
++        # итоговые суммы (real-04/05: 32 692 / 41 382,29 — числа из
++        # материалов, но сборщик их не цитирует). Находка
++        # независимого ревью: демо-сайт показывал заказчику то, что
++        # конвейер приложения уже считал чистым.
++        built_by="rules",
+     )
+     report = verify_draft(
+         DraftResult(case_number=pack.case_number, provider="rules", sections=[section]),
+@@ -205,6 +213,12 @@ async def process(case_dir: Path) -> dict[str, Any]:
+                     "basis": counter.basis,
+                     "outcome": str(counter.outcome.value),
+                     "source": counter.source,
++                    # Суммы нужны аудиту: резолютивная включает
++                    # удовлетворённый встречный иск в итог «а всего»,
++                    # и сверка итога без этих числовала бы ложный
++                    # дефект на правильном выводе.
++                    "amount": float(counter.amount or 0),
++                    "kopecks": int(counter.kopecks),
+                 }
+                 for counter in counters
+             ],
+diff --git a/scripts/e2e_audit.py b/scripts/e2e_audit.py
+index 85f0c99..9526d43 100644
+--- a/scripts/e2e_audit.py
++++ b/scripts/e2e_audit.py
+@@ -132,6 +132,17 @@ def audit_case(case_dir: Path) -> dict[str, Any]:
+                     int(claim.get("granted_kopecks") or 0),
+                 )
+             )
++    # Встречный иск: резолютивная включает удовлетворённый встречный
++    # в итог «а всего» (operative.py), поэтому и сверка его считает —
++    # иначе появление такого дела дало бы ложный дефект итога.
++    for counter in rules.get("counter_claims") or []:
++        if counter.get("outcome", "satisfied") == "satisfied":
++            counted.append(
++                (
++                    float(counter.get("amount") or 0),
++                    int(counter.get("kopecks") or 0),
++                )
++            )
+     expected_kopecks = sum(kop for _, kop in counted)
+     expected_total = (
+         sum(amount for amount, _ in counted)
+diff --git a/site/demo/cases.json b/site/demo/cases.json
+index 0544ea7..e9a7d54 100644
+--- a/site/demo/cases.json
++++ b/site/demo/cases.json
+@@ -39,18 +39,18 @@
+             "kopecks": 84,
+             "basis": "задолженность за жилищно-коммунальные услуги",
+             "source": "01_claim.txt",
+-            "outcome": "satisfied",
+-            "granted_amount": null,
+-            "granted_kopecks": 0
++            "outcome": "partial",
++            "granted_amount": 0.0,
++            "granted_kopecks": 72
+           },
+           {
+             "amount": 7919.0,
+             "kopecks": 17,
+             "basis": "задолженность за ремонт и содержание жилья",
+             "source": "05_protocol.txt",
+-            "outcome": "satisfied",
+-            "granted_amount": null,
+-            "granted_kopecks": 0
++            "outcome": "partial",
++            "granted_amount": 21965.0,
++            "granted_kopecks": 7
+           }
+         ],
+         "other_claims": [],
+@@ -70,25 +70,21 @@
+         "total_kopecks": 1,
+         "total_with_fee": 19471.0
+       },
+-      "operative_text": "Руководствуясь ст. 198 ГПК РФ, суд решил:\n1. Удовлетворить исковые требования истца в полном объёме: взыскать с ответчика в пользу истца 11 107 руб. 84 коп. (задолженность за жилищно-коммунальные услуги, 01_claim.txt).\n2. Удовлетворить исковые требования истца в полном объёме: взыскать с ответчика в пользу истца 7 919 руб. 17 коп. (задолженность за ремонт и содержание жилья, 05_protocol.txt).\n3. Взыскать с ответчика в пользу истца государственную пошлину в размере 444 руб. 00 коп. (ст. 98 ГПК РФ).\n4. Всего подлежит взысканию 19 471 (девятнадцать тысяч четыреста семьдесят один) руб. 01 коп.\n5. Решение может быть обжаловано в апелляционном порядке в течение месяца со дня принятия решения в окончательной форме, если иные сроки не установлены настоящим Кодексом (ст. 321 ГПК РФ).",
++      "operative_text": "Руководствуясь ст. 198 ГПК РФ, суд решил:\n1. Удовлетворить исковые требования истца частично: взыскать с ответчика в пользу истца 0 руб. 72 коп. (задолженность за жилищно-коммунальные услуги; сумма, установленная судом (см. 06_court_findings.txt)). В остальной части отказать в удовлетворении исковых требований истца.\n2. Удовлетворить исковые требования истца частично: взыскать с ответчика в пользу истца 21 965 руб. 07 коп. (задолженность за ремонт и содержание жилья; сумма суда больше заявленной (см. 06_court_findings.txt) — сверьте). В остальной части отказать в удовлетворении исковых требований истца.\n3. Взыскать с ответчика в пользу истца государственную пошлину пропорционально размеру удовлетворённых исковых требований в размере ТРЕБУЕТ ПРОВЕРКИ СПЕЦИАЛИСТОМ (ч. 1 ст. 98 ГПК РФ).\n4. Всего подлежит взысканию 21 965 (двадцать одна тысяча девятьсот шестьдесят пять) руб. 79 коп.\n5. Решение может быть обжаловано в апелляционном порядке в течение месяца со дня принятия решения в окончательной форме, если иные сроки не установлены настоящим Кодексом (ст. 321 ГПК РФ).\n\nТРЕБУЕТ ПРОВЕРКИ СПЕЦИАЛИСТОМ: исход по части требований не полный — размер госпошлины пропорционален удовлетворённой части и требует расчёта судьи",
+       "sources": [
+         "01_claim.txt",
+         "05_protocol.txt"
+       ],
+-      "gaps": [],
++      "gaps": [
++        "исход по части требований не полный — размер госпошлины пропорционален удовлетворённой части и требует расчёта судьи"
++      ],
+       "verification": {
+         "status": "REVIEW_REQUIRED",
+         "issues": [
+           {
+-            "type": "UNSUPPORTED_CLAIM",
+-            "severity": "CRITICAL",
+-            "reason": "число 19471 отсутствует в материалах дела — возможна выдумка модели",
+-            "section": "РЕШИЛ"
+-          },
+-          {
+-            "type": "UNSUPPORTED_CLAIM",
+-            "severity": "CRITICAL",
+-            "reason": "число 84 отсутствует в материалах дела — возможна выдумка модели",
++            "type": "INCOMPLETE",
++            "severity": "MEDIUM",
++            "reason": "раздел помечен как требующий проверки специалистом",
+             "section": "РЕШИЛ"
+           },
+           {
+@@ -98,7 +94,7 @@
+             "section": ""
+           }
+         ],
+-        "unsupported_claims": 2,
++        "unsupported_claims": 0,
+         "claims_checked": 1
+       }
+     },
+@@ -386,18 +382,6 @@
+             "reason": "раздел помечен как требующий проверки специалистом",
+             "section": "РЕШИЛ"
+           },
+-          {
+-            "type": "UNSUPPORTED_CLAIM",
+-            "severity": "CRITICAL",
+-            "reason": "число 32692 отсутствует в материалах дела — возможна выдумка модели",
+-            "section": "РЕШИЛ"
+-          },
+-          {
+-            "type": "UNSUPPORTED_CLAIM",
+-            "severity": "CRITICAL",
+-            "reason": "число 90 отсутствует в материалах дела — возможна выдумка модели",
+-            "section": "РЕШИЛ"
+-          },
+           {
+             "type": "OBJECTIONS_UNADDRESSED",
+             "severity": "HIGH",
+@@ -411,7 +395,7 @@
+             "section": ""
+           }
+         ],
+-        "unsupported_claims": 2,
++        "unsupported_claims": 0,
+         "claims_checked": 1
+       }
+     },
+@@ -510,36 +494,6 @@
+             "reason": "раздел помечен как требующий проверки специалистом",
+             "section": "РЕШИЛ"
+           },
+-          {
+-            "type": "UNSUPPORTED_CLAIM",
+-            "severity": "CRITICAL",
+-            "reason": "число 10000 отсутствует в материалах дела — возможна выдумка модели",
+-            "section": "РЕШИЛ"
+-          },
+-          {
+-            "type": "UNSUPPORTED_CLAIM",
+-            "severity": "CRITICAL",
+-            "reason": "число 10460 отсутствует в материалах дела — возможна выдумка модели",
+-            "section": "РЕШИЛ"
+-          },
+-          {
+-            "type": "UNSUPPORTED_CLAIM",
+-            "severity": "CRITICAL",
+-            "reason": "число 41382 отсутствует в материалах дела — возможна выдумка модели",
+-            "section": "РЕШИЛ"
+-          },
+-          {
+-            "type": "UNSUPPORTED_CLAIM",
+-            "severity": "CRITICAL",
+-            "reason": "число 53 отсутствует в материалах дела — возможна выдумка модели",
+-            "section": "РЕШИЛ"
+-          },
+-          {
+-            "type": "UNSUPPORTED_CLAIM",
+-            "severity": "CRITICAL",
+-            "reason": "число 76 отсутствует в материалах дела — возможна выдумка модели",
+-            "section": "РЕШИЛ"
+-          },
+           {
+             "type": "OBJECTIONS_UNADDRESSED",
+             "severity": "HIGH",
+@@ -553,7 +507,7 @@
+             "section": ""
+           }
+         ],
+-        "unsupported_claims": 5,
++        "unsupported_claims": 0,
+         "claims_checked": 1
+       }
+     },
+@@ -667,12 +621,6 @@
+             "reason": "раздел помечен как требующий проверки специалистом",
+             "section": "РЕШИЛ"
+           },
+-          {
+-            "type": "UNSUPPORTED_CLAIM",
+-            "severity": "CRITICAL",
+-            "reason": "число 15780 отсутствует в материалах дела — возможна выдумка модели",
+-            "section": "РЕШИЛ"
+-          },
+           {
+             "type": "OBJECTIONS_UNADDRESSED",
+             "severity": "HIGH",
+@@ -686,7 +634,7 @@
+             "section": ""
+           }
+         ],
+-        "unsupported_claims": 1,
++        "unsupported_claims": 0,
+         "claims_checked": 1
+       }
+     },
+@@ -766,12 +714,6 @@
+             "reason": "раздел помечен как требующий проверки специалистом",
+             "section": "РЕШИЛ"
+           },
+-          {
+-            "type": "UNSUPPORTED_CLAIM",
+-            "severity": "CRITICAL",
+-            "reason": "число 80 отсутствует в материалах дела — возможна выдумка модели",
+-            "section": "РЕШИЛ"
+-          },
+           {
+             "type": "OBJECTIONS_UNADDRESSED",
+             "severity": "HIGH",
+@@ -779,7 +721,7 @@
+             "section": ""
+           }
+         ],
+-        "unsupported_claims": 1,
++        "unsupported_claims": 0,
+         "claims_checked": 1
+       }
+     },
+@@ -856,16 +798,9 @@
+       ],
+       "gaps": [],
+       "verification": {
+-        "status": "REVIEW_REQUIRED",
+-        "issues": [
+-          {
+-            "type": "UNSUPPORTED_CLAIM",
+-            "severity": "CRITICAL",
+-            "reason": "число 18816 отсутствует в материалах дела — возможна выдумка модели",
+-            "section": "РЕШИЛ"
+-          }
+-        ],
+-        "unsupported_claims": 1,
++        "status": "PASS",
++        "issues": [],
++        "unsupported_claims": 0,
+         "claims_checked": 1
+       }
+     },
+@@ -903,7 +838,7 @@
+           {
+             "amount": 0.0,
+             "kopecks": 0,
+-            "basis": "расходы в долевой части",
++            "basis": "расходы в долевой части 1/3",
+             "source": "01_claim.txt",
+             "outcome": "satisfied",
+             "granted_amount": null,
+@@ -927,12 +862,12 @@
+         "total_kopecks": 0,
+         "total_with_fee": 0.0
+       },
+-      "operative_text": "Руководствуясь ст. 198 ГПК РФ, суд решил:\n1. Удовлетворить исковые требования истца в полном объёме: взыскать с ответчика в пользу истца ТРЕБУЕТ ПРОВЕРКИ СПЕЦИАЛИСТОМ (расходы в долевой части, 01_claim.txt).\n2. Решение может быть обжаловано в апелляционном порядке в течение месяца со дня принятия решения в окончательной форме, если иные сроки не установлены настоящим Кодексом (ст. 321 ГПК РФ).\n\nТРЕБУЕТ ПРОВЕРКИ СПЕЦИАЛИСТОМ: не указана сумма по требованию «расходы в долевой части»; не установлен размер государственной пошлины — пункт о распределении расходов требует проверки",
++      "operative_text": "Руководствуясь ст. 198 ГПК РФ, суд решил:\n1. Удовлетворить исковые требования истца в полном объёме: взыскать с ответчика в пользу истца ТРЕБУЕТ ПРОВЕРКИ СПЕЦИАЛИСТОМ (расходы в долевой части 1/3, 01_claim.txt).\n2. Решение может быть обжаловано в апелляционном порядке в течение месяца со дня принятия решения в окончательной форме, если иные сроки не установлены настоящим Кодексом (ст. 321 ГПК РФ).\n\nТРЕБУЕТ ПРОВЕРКИ СПЕЦИАЛИСТОМ: не указана сумма по требованию «расходы в долевой части 1/3»; не установлен размер государственной пошлины — пункт о распределении расходов требует проверки",
+       "sources": [
+         "01_claim.txt"
+       ],
+       "gaps": [
+-        "не указана сумма по требованию «расходы в долевой части»",
++        "не указана сумма по требованию «расходы в долевой части 1/3»",
+         "не установлен размер государственной пошлины — пункт о распределении расходов требует проверки"
+       ],
+       "verification": {
+-- 
+2.53.0.windows.2
+

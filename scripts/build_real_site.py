@@ -161,6 +161,14 @@ async def process(case_dir: Path) -> dict[str, Any]:
         text=operative.render(),
         is_mock=False,
         citations=sources,
+        # Резолютивная собрана правилами, а не моделью: без пометки
+        # проверка относится к ней как к тексту модели и вешает
+        # ложные CRITICAL «число … отсутствует в материалах» на
+        # итоговые суммы (real-04/05: 32 692 / 41 382,29 — числа из
+        # материалов, но сборщик их не цитирует). Находка
+        # независимого ревью: демо-сайт показывал заказчику то, что
+        # конвейер приложения уже считал чистым.
+        built_by="rules",
     )
     report = verify_draft(
         DraftResult(case_number=pack.case_number, provider="rules", sections=[section]),
@@ -205,6 +213,12 @@ async def process(case_dir: Path) -> dict[str, Any]:
                     "basis": counter.basis,
                     "outcome": str(counter.outcome.value),
                     "source": counter.source,
+                    # Суммы нужны аудиту: резолютивная включает
+                    # удовлетворённый встречный иск в итог «а всего»,
+                    # и сверка итога без этих числовала бы ложный
+                    # дефект на правильном выводе.
+                    "amount": float(counter.amount or 0),
+                    "kopecks": int(counter.kopecks),
                 }
                 for counter in counters
             ],
