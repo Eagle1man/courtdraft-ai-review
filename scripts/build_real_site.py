@@ -184,6 +184,7 @@ async def process(case_dir: Path) -> dict[str, Any]:
                     "kopecks": int(claim.kopecks),
                     "basis": claim.basis,
                     "source": claim.source,
+                    "outcome": str(claim.outcome.value),
                 }
                 for claim in money
             ],

@@ -78,16 +78,37 @@ def audit_case(case_dir: Path) -> dict[str, Any]:
     # Без этой сверки перенос копеек в рубли проходил незамеченным:
     # 10 000,00 + 20 921,53 + 10 460,76 печаталось как «41 381 руб.
     # 29 коп.» вместо «41 382 руб. 29 коп.» (real-05).
+    #
+    # Считаются только удовлетворённые требования: резолюция строит
+    # итог по тем, что присуждены, а отказные и частичные в него не
+    # входят. Иначе сверка завела бы дефект на правильном выводе.
     total_line = re.search(
-        r"Всего подлежит взысканию\s+([\d\s\u00a0\u202f]+)\s*\([^)]*\)\s*руб\.\s*"
+        r"Всего подлежит взысканию\s+([\d\s   ]+)\s*\([^)]*\)\s*руб\.\s*"
         r"(\d{1,2})\s*коп",
         operative,
     )
     costs = float(rules.get("costs") or 0)
-    expected_total = total + fee + costs
-    expected_kopecks = int(rules.get("total_kopecks") or 0)
+    satisfied = [
+        claim
+        for claim in (rules.get("claims") or [])
+        if claim.get("outcome", "satisfied") == "satisfied"
+    ]
+    expected_kopecks = sum(int(claim.get("kopecks") or 0) for claim in satisfied)
+    expected_total = (
+        sum(float(claim.get("amount") or 0) for claim in satisfied)
+        + expected_kopecks // 100
+        + fee
+        + costs
+    )
+    expected_kopecks = expected_kopecks % 100
     if total_line:
-        stated = float(total_line.group(1).replace(" ", "").replace("\u00a0", ""))
+        stated = float(
+            total_line.group(1)
+            .replace(" ", "")
+            .replace(" ", "")
+            .replace(" ", "")
+            .replace(" ", "")
+        )
         stated_kopecks = int(total_line.group(2))
         if abs(stated - expected_total) > 0.01 or stated_kopecks != expected_kopecks:
             defects.append(
