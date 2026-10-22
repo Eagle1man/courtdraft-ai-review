@@ -1,0 +1,156 @@
+From 216f4ce8c3a94af0b5d006fe60343341ae862ff1 Mon Sep 17 00:00:00 2001
+From: Eagle1man <orel198611@gmail.com>
+Date: Thu, 22 Oct 2026 04:32:01 +0300
+Subject: [PATCH] =?UTF-8?q?=D0=90=D1=83=D0=B4=D0=B8=D1=82=20=D1=81=D0=B2?=
+ =?UTF-8?q?=D0=B5=D1=80=D1=8F=D0=B5=D1=82=20=D0=B8=D1=82=D0=BE=D0=B3=20?=
+ =?UTF-8?q?=D1=81=20=D0=BA=D0=BE=D0=BF=D0=B5=D0=B9=D0=BA=D0=B0=D0=BC=D0=B8?=
+ =?UTF-8?q?;=20=D0=B8=D0=BD=D1=8B=D0=B5=20=D1=80=D0=B0=D1=81=D1=85=D0=BE?=
+ =?UTF-8?q?=D0=B4=D1=8B=20=D0=BD=D0=B5=20=D0=B8=D1=81=D1=87=D0=B5=D0=B7?=
+ =?UTF-8?q?=D0=B0=D1=8E=D1=82=20=D0=B1=D0=B5=D0=B7=20=D0=BF=D0=BE=D1=88?=
+ =?UTF-8?q?=D0=BB=D0=B8=D0=BD=D1=8B?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Сквозной аудит суммировал только рубли, поэтому перенос копеек в рубли проходил незамеченным - теперь scripts/e2e_audit.py сверяет строку 'Всего подлежит взысканию' с суммой пунктов, пошлины и иных расходов с копейками. Первая же проверка нашла дефект: иные расходы по ст. 100 ГПК РФ жили внутри блока пошлины и в деле без пошлины (real-04) исчезали из проекта целиком и не попадали в итог (3 000). Теперь это отдельный пункт, real-04 показывает 32 692 руб. 90 коп. Suite 758/0, ruff, mypy чисто.
+---
+ backend/app/drafting/operative.py | 13 +++++++++++++
+ docs/agent-summary.md             |  7 ++++++-
+ docs/end-to-end-evaluation.md     | 14 ++++++++++++++
+ scripts/build_real_site.py        |  9 ++++++++-
+ scripts/e2e_audit.py              | 23 +++++++++++++++++++++++
+ 5 files changed, 64 insertions(+), 2 deletions(-)
+
+diff --git a/backend/app/drafting/operative.py b/backend/app/drafting/operative.py
+index 367e952..e75bafe 100644
+--- a/backend/app/drafting/operative.py
++++ b/backend/app/drafting/operative.py
+@@ -761,6 +761,19 @@ def build_operative(
+             if costs is not None:
+                 granted.append((costs, 0))
+ 
++    # Иные расходы по ст. 100 ГПК РФ не зависят от пошлины: их понёс
++    # истец, и суд возвращает их независимо от того, известна ли
++    # пошлина. Раньше пункт о них жил внутри блока пошлины, и в деле
++    # без пошлины (real-04) иные расходы исчезали из проекта целиком
++    # и не попадали в итог «а всего».
++    if costs is not None and not (fee_stakes and fee_paid is not None):
++        result.items.append(
++            f"Взыскать с {named.defendant_genitive} в пользу "
++            f"{named.plaintiff_genitive} иные расходы в размере "
++            f"{_amount(costs)} (ст. 100 ГПК РФ)."
++        )
++        granted.append((costs, 0))
++
+     # 5. Итог «а всего». Так пишут в резолюции: одна цифра, из которой
+     #    видно общий размер взыскания.
+     if total_line and granted:
+diff --git a/docs/agent-summary.md b/docs/agent-summary.md
+index af3ff65..149d7b3 100644
+--- a/docs/agent-summary.md
++++ b/docs/agent-summary.md
+@@ -106,7 +106,12 @@ Push не выполнялся.
+    резолюции переносит копейки в рубли (было 41 381 руб. 29 коп. вместо
+    41 382 руб. 29 коп.), добавлена форма «расходы на проведение
+    экспертизы», таблица итогов Этапа 2 помечена как снимок.
+-   Suite 758 тестов.
++   Suite 758 тестов. Сверка «Всего подлежит взысканию» с суммой
++   пунктов (с копейками) добавлена в `scripts/e2e_audit.py` — и сразу
++   нашла ещё один дефект: иные расходы по ст. 100 ГПК РФ исчезали из
++   проекта, когда пошлина по делу неизвестна (пункт о них жил внутри
++   блока пошлины; real-04 терял 3 000). Теперь иные расходы — отдельный
++   пункт и входят в итог.
+    Осталось: real-10 — требование «1/3 часть от суммы» честно в
+    непознанных (пропорциональная доля); «стоимость сотового
+    телефона» (real-06) не распознаётся (якорь на «стоимость товара»);
+diff --git a/docs/end-to-end-evaluation.md b/docs/end-to-end-evaluation.md
+index 2d595ed..e08fed4 100644
+--- a/docs/end-to-end-evaluation.md
++++ b/docs/end-to-end-evaluation.md
+@@ -233,6 +233,20 @@ real-04 в одной фразе стоят и неустойка 10 564,40, и
+ 
+ Итог после трёх раундов ревью: 758 тестов, ruff и mypy чисто.
+ 
++**Харнесс научился проверять копейки.** Ревью заметило: сквозной
++аудит суммировал только рубли, поэтому перенос копеек в рубли
++проходил незамеченным. Теперь `scripts/e2e_audit.py` сверяет строку
++«Всего подлежит взысканию» в резолюции с суммой пунктов, пошлины и
++иных расходов — **с копейками**.
++
++Первая же проверка нашла ещё один дефект: **иные расходы по ст. 100
++ГПК РФ исчезали из проекта, когда пошлина по делу неизвестна** — пункт
++о них жил внутри блока пошлины (real-04: затраты на экспертизу 3 000 не
++попадали ни в резолюцию, ни в итог «а всего»). Иные расходы от пошлины
++не зависят: их понёс истец, и суд возвращает их независимо от того,
++известна ли пошлина. Теперь это отдельный пункт, и real-04 показывает
++«Всего подлежит взысканию 32 692 руб. 90 коп.» вместо 29 692,90.
++
+ Что осталось: «стоимость сотового телефона» (real-06) не
+ распознаётся — якорь на «стоимость товара», а телефон — не товар по
+ формулировке; сокращение «руб.» с точкой разрывает связь «взыскать …
+diff --git a/scripts/build_real_site.py b/scripts/build_real_site.py
+index 6b503fd..4f57319 100644
+--- a/scripts/build_real_site.py
++++ b/scripts/build_real_site.py
+@@ -167,9 +167,15 @@ async def process(case_dir: Path) -> dict[str, Any]:
+         pack,
+     )
+ 
+-    total = sum(
++    total_rubles = sum(
+         float(claim.amount or 0) for claim in money if claim.amount is not None
+     )
++    total_kopecks = sum(int(claim.kopecks) for claim in money)
++    # Копейки переносятся в рубли: 20 921,53 + 10 460,76 дают 41 382,29,
++    # а не 41 381,29. Без переноса итог в резолюции расходился с
++    # суммой перечисленных пунктов на один рубль (real-05).
++    total = total_rubles + total_kopecks // 100
++    total_kopecks = total_kopecks % 100
+     return {
+         "rules": {
+             "claims": [
+@@ -203,6 +209,7 @@ async def process(case_dir: Path) -> dict[str, Any]:
+                 "defendant": parties.defendant,
+             },
+             "total": total,
++            "total_kopecks": total_kopecks,
+             "total_with_fee": total + float(fee or 0),
+         },
+         "operative_text": operative.render(),
+diff --git a/scripts/e2e_audit.py b/scripts/e2e_audit.py
+index c4e3a75..364b1c5 100644
+--- a/scripts/e2e_audit.py
++++ b/scripts/e2e_audit.py
+@@ -74,6 +74,29 @@ def audit_case(case_dir: Path) -> dict[str, Any]:
+     if abs(total_with_fee - (total + fee)) > 0.01:
+         defects.append(f"арифметика: итог {total_with_fee} != {total}+{fee}")
+ 
++    # 3a. Итог в резолюции против суммы пунктов — с копейками.
++    # Без этой сверки перенос копеек в рубли проходил незамеченным:
++    # 10 000,00 + 20 921,53 + 10 460,76 печаталось как «41 381 руб.
++    # 29 коп.» вместо «41 382 руб. 29 коп.» (real-05).
++    total_line = re.search(
++        r"Всего подлежит взысканию\s+([\d\s\u00a0\u202f]+)\s*\([^)]*\)\s*руб\.\s*"
++        r"(\d{1,2})\s*коп",
++        operative,
++    )
++    costs = float(rules.get("costs") or 0)
++    expected_total = total + fee + costs
++    expected_kopecks = int(rules.get("total_kopecks") or 0)
++    if total_line:
++        stated = float(total_line.group(1).replace(" ", "").replace("\u00a0", ""))
++        stated_kopecks = int(total_line.group(2))
++        if abs(stated - expected_total) > 0.01 or stated_kopecks != expected_kopecks:
++            defects.append(
++                f"итог в резолюции: {stated} руб. {stated_kopecks:02d} коп. "
++                f"!= {expected_total} руб. {expected_kopecks:02d} коп."
++            )
++    elif expected_total:
++        defects.append("в резолюции нет строки «Всего подлежит взысканию»")
++
+     # 4. Покрытие документов: материалы без источников
+     unused = sorted(f for f in files if f not in {s.split(",")[0].strip() for s in sources}
+                     and f not in {"manifest.json", "court_decision_reference.txt"})
+-- 
+2.53.0.windows.2
+
