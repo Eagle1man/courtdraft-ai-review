@@ -44,6 +44,7 @@ uploads/
 # Отчёты проекта — служебные документы, в отличие от материалов дел
 !docs/report-mvp.docx
 !docs/for-rector.docx
+!docs/Итог-ТЗ-и-график-CourtDraft-AI.docx
 
 # Служебные файлы перенаправления вывода при фоновых прогонах демо
 backend/.demo*.out
