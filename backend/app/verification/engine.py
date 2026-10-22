@@ -35,7 +35,7 @@ from app.verification.evidence_assessment import (
 )
 from app.verification.jurisdiction import check_jurisdiction
 from app.verification.laws import LawRegistry, extract_fee, fee_matches, state_fee
-from app.verification.persons import check_section
+from app.verification.persons import PersonFinding, RoleFinding, check_section
 from app.verification.qualification import check_qualification
 from app.verification.subject_of_proof import ProofFact, subject_of_proof
 
@@ -543,8 +543,20 @@ def verify_draft(
         # «выдуманное число».
         law_numbers = {article for article, _ in _laws_in(text)}
 
+        # ── Разделы, собранные правилами, а не моделью ────────────
+        #
+        # Проверки 1, 3 и 6 написаны для текста модели: выдуманное
+        # число, выдуманная персона и отсутствие источника — это
+        # признаки именно модели. В разделах, собранных правилами,
+        # итог «а всего», копейки и госпошлина — арифметика проекта,
+        # которой в материалах в готовом виде быть не может, а
+        # «Именем Российской Федерации» — установленная форма, а не
+        # персона. На живом прогоне это давало 8 CRITICAL на проекте
+        # без единой выдумки, и настоящие тревоги тонули в ложных.
+        by_rules = section.built_by == "rules"
+
         # ── 1. Раздел без единой ссылки на источник ────────────────
-        if not section.citations and not pack.by_category(section.key):
+        if not by_rules and not section.citations and not pack.by_category(section.key):
             report.issues.append(
                 Issue(
                     type=IssueType.MISSING_SOURCE,
@@ -571,38 +583,44 @@ def verify_draft(
             )
 
         # ── 3. Числа, которых нет в материалах (главная проверка) ──
-        found_numbers = _numbers_in(text)
-        # Числа, которые опираются на материалы дела. Сумма из них —
-        # не выдумка, а арифметика проекта: «а всего» в резолюции
-        # считается системой из уже подтверждённых сумм, и её не может
-        # быть в материалах в готовом виде.
-        backed = {
-            int(number)
-            for number in found_numbers
-            if number in material_numbers
-        }
-        invented = {
-            number
-            for number in found_numbers
-            if number not in material_numbers
-            and number not in small_numbers
-            and number not in law_numbers
-            and not _is_sum_of(number, backed)
-        }
-        for number in sorted(invented):
-            report.unsupported_claims += 1
-            report.issues.append(
-                Issue(
-                    type=IssueType.UNSUPPORTED_CLAIM,
-                    severity=Severity.CRITICAL,
-                    text=text[:200],
-                    reason=(
-                        f"число {number} отсутствует в материалах дела — "
-                        "возможна выдумка модели"
-                    ),
-                    section=section.name,
+        if by_rules:
+            # Числа раздела собраны из материалов правилами: сверка
+            # их арифметики — работа scripts/e2e_audit.py, а не
+            # проверки «на выдумку модели».
+            pass
+        else:
+            found_numbers = _numbers_in(text)
+            # Числа, которые опираются на материалы дела. Сумма из них —
+            # не выдумка, а арифметика проекта: «а всего» в резолюции
+            # считается системой из уже подтверждённых сумм, и её не может
+            # быть в материалах в готовом виде.
+            backed = {
+                int(number)
+                for number in found_numbers
+                if number in material_numbers
+            }
+            invented = {
+                number
+                for number in found_numbers
+                if number not in material_numbers
+                and number not in small_numbers
+                and number not in law_numbers
+                and not _is_sum_of(number, backed)
+            }
+            for number in sorted(invented):
+                report.unsupported_claims += 1
+                report.issues.append(
+                    Issue(
+                        type=IssueType.UNSUPPORTED_CLAIM,
+                        severity=Severity.CRITICAL,
+                        text=text[:200],
+                        reason=(
+                            f"число {number} отсутствует в материалах дела — "
+                            "возможна выдумка модели"
+                        ),
+                        section=section.name,
+                    )
                 )
-            )
 
         # ── 4. Ссылки на нормы без подтверждения ───────────────────
         for article, code in _laws_in(text):
@@ -675,7 +693,13 @@ def verify_draft(
             )
 
         # ── 6. Персоны, которых нет в материалах дела ─────────────
-        persons, roles = check_section(text, section.name, pack)
+        # В правилах-разделах формульные слова («Именем Российской
+        # Федерации») за персону не считаются — см. пояснение к by_rules.
+        if by_rules:
+            persons: list[PersonFinding] = []
+            roles: list[RoleFinding] = []
+        else:
+            persons, roles = check_section(text, section.name, pack)
 
         for finding in persons:
             report.unsupported_claims += 1
