@@ -57,6 +57,20 @@
     return text ? text + " руб." : "";
   }
 
+  /* Сумма с копейками: «20 921,53 руб.». Копейки в требованиях есть,
+     и итог без них расходится с перечнем на копейки. */
+  function rublesWith(value, kopecks) {
+    var text = money(value);
+    if (!text) {
+      return "";
+    }
+    if (kopecks) {
+      var tail = kopecks < 10 ? "0" + kopecks : String(kopecks);
+      return text + "," + tail + " руб.";
+    }
+    return text + " руб.";
+  }
+
   function case_() {
     return state.current || {};
   }
@@ -189,7 +203,7 @@
       }
       var parts = claims.map(function (claim) {
         return (
-          escapeHtml(rubles(claim.amount)) +
+          escapeHtml(rublesWith(claim.amount, claim.kopecks)) +
           " — " +
           escapeHtml(claim.basis || "") +
           " " +
@@ -203,7 +217,7 @@
       }
       return (
         "<p>Итог <strong>" +
-        escapeHtml(rubles(total)) +
+        escapeHtml(rublesWith(total, data.total_kopecks)) +
         "</strong> сложен из сумм, которые есть в материалах дела:</p>" +
         "<p>" +
         parts.join("<br>＋<br>") +

@@ -222,6 +222,10 @@ def collect_rules(pack: EvidencePack) -> dict:
     fee, costs = extract_fee_and_costs(pack)
     parties = extract_parties(pack)
     procedure = extract_procedure(pack)
+    total_rubles = sum(
+        float(claim.amount or 0) for claim in money if claim.amount is not None
+    )
+    total_kopecks = sum(int(claim.kopecks) for claim in money)
 
     return {
         "claims": [
@@ -230,6 +234,7 @@ def collect_rules(pack: EvidencePack) -> dict:
                 "kopecks": int(claim.kopecks),
                 "basis": claim.basis,
                 "source": claim.source,
+                "outcome": str(claim.outcome.value),
             }
             for claim in money
         ],
@@ -256,17 +261,17 @@ def collect_rules(pack: EvidencePack) -> dict:
             "plaintiff": parties.plaintiff,
             "defendant": parties.defendant,
         },
-        "total": sum(
-            float(claim.amount or 0) for claim in money if claim.amount is not None
-        ),
+        # Итог с переносом копеек в рубли: 20 921,53 + 10 460,76 дают
+        # 41 382,29, а не 41 381,29. Без переноса итог расходился с
+        # суммой перечисленных пунктов (и не совпадал с тем, что
+        # считает scripts/build_real_site.py — одно поле, одно значение).
+        "total": total_rubles + total_kopecks // 100,
+        "total_kopecks": total_kopecks % 100,
         # Итог резолютивной части. Отдельно от total, потому что в
         # строке «а всего» участвует и госпошлина: 150 000 + 5 100 =
         # 155 100. На вопрос «откуда эта сумма» нужен именно этот итог,
         # иначе диалог отвечает не на тот вопрос.
-        "total_with_fee": sum(
-            float(claim.amount or 0) for claim in money if claim.amount is not None
-        )
-        + float(fee or 0),
+        "total_with_fee": total_rubles + total_kopecks // 100 + float(fee or 0),
     }
 
 

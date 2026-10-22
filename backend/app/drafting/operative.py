@@ -766,7 +766,11 @@ def build_operative(
     # пошлина. Раньше пункт о них жил внутри блока пошлины, и в деле
     # без пошлины (real-04) иные расходы исчезали из проекта целиком
     # и не попадали в итог «а всего».
-    if costs is not None and not (fee_stakes and fee_paid is not None):
+    #
+    # Флаг fee_stakes означает «не выводить требование о распределении
+    # расходов» — это касается и ст. 100, поэтому иные расходы под
+    # флагом тоже не выводятся.
+    if costs is not None and fee_stakes and not (fee_paid is not None):
         result.items.append(
             f"Взыскать с {named.defendant_genitive} в пользу "
             f"{named.plaintiff_genitive} иные расходы в размере "
