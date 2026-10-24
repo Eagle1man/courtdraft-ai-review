@@ -67,6 +67,7 @@ class IssueType(StrEnum):
     EXPERT_UNASSESSED = "EXPERT_UNASSESSED"
     CLAIM_AMOUNT_UNPARSED = "CLAIM_AMOUNT_UNPARSED"
     CITATION_DANGLING = "CITATION_DANGLING"
+    PENALTY_BASIS_UNCONFIRMED = "PENALTY_BASIS_UNCONFIRMED"
 
 
 class Severity(StrEnum):
@@ -338,6 +339,95 @@ SYSTEM_LAWS: frozenset[tuple[str, str]] = frozenset(
         ("321", "ГПК"),  # срок подачи апелляционной жалобы
     }
 )
+
+
+#: Дата вида 15.04.2025 — так в материалах дела записаны почти все даты.
+_RU_DATE = re.compile(r"\b\d{2}\.\d{2}\.\d{4}\b")
+#: Дата рядом с претензией: «Претензия от 01.09.2025» и тому подобное.
+_PRETRIAL_CLAIM_DATE = re.compile(r"претензи\w*\D{0,60}?(\d{2}\.\d{2}\.\d{4})", re.I)
+#: Дата рядом со словом об исполнении: «оплатил 05.09.2025», «возврат от 10.09.2025».
+_SATISFACTION_DATE = re.compile(
+    r"(?:оплат|возврат|возвращ|перечисл|удовлетвор|исполн)\D{0,60}?(\d{2}\.\d{2}\.\d{4})",
+    re.I,
+)
+#: ЗоЗПП, ст. 22: требование потребителя удовлетворяется в десятидневный срок,
+#: по его истечении отказ добровольно не удовлетворять считается подтверждённым.
+_PENALTY_WINDOW_DAYS = 10
+
+
+def _parse_ru_date(raw: str) -> date | None:
+    """Дата из материалов дела, если записана в форме 15.04.2025."""
+    try:
+        day, month, year = (int(part) for part in raw.split("."))
+        return date(year, month, day)
+    except ValueError:
+        return None
+
+
+def _check_penalty_basis(
+    text: str, pack: EvidencePack, report: VerificationReport, section_name: str
+) -> None:
+    """Штраф в резолютивной против материалов дела.
+
+    Штраф (п. 6 ст. 13 ЗоЗПП) взыскивается, только если ответчик
+    добровольно не удовлетворил требование. Но «не найдено» не равно
+    «не было»: дефект разметки неотличим от отсутствия документа,
+    поэтому отсутствие претензии — это MEDIUM, а не HIGH.
+    """
+    if not re.search(r"\bштраф", text, re.I):
+        return
+    claimed = [
+        name
+        for name, doc in pack.documents.items()
+        if re.search(r"претензи", name, re.I) or re.search(r"претензи", doc, re.I)
+    ]
+    if not claimed:
+        report.issues.append(
+            Issue(
+                type=IssueType.PENALTY_BASIS_UNCONFIRMED,
+                severity=Severity.MEDIUM,
+                text=text[:200],
+                reason=(
+                    "штраф начислен; по материалам претензия не найдена — "
+                    "проверьте, заявлялось ли требование до суда"
+                ),
+                section=section_name,
+            )
+        )
+        return
+    claim_on = None
+    for name in claimed:
+        near = _PRETRIAL_CLAIM_DATE.search(pack.documents[name])
+        first = _RU_DATE.search(pack.documents[name])
+        raw = near.group(1) if near else (first.group(0) if first else "")
+        claim_on = _parse_ru_date(raw) if raw else None
+        if claim_on:
+            break
+    if claim_on is None:
+        return
+    for name, doc in pack.documents.items():
+        if name in claimed:
+            continue
+        done = _SATISFACTION_DATE.search(doc)
+        if not done:
+            continue
+        satisfied = _parse_ru_date(done.group(1))
+        if satisfied is None or not 0 <= (satisfied - claim_on).days <= _PENALTY_WINDOW_DAYS:
+            continue
+        report.issues.append(
+            Issue(
+                type=IssueType.PENALTY_BASIS_UNCONFIRMED,
+                severity=Severity.HIGH,
+                text=text[:200],
+                reason=(
+                    "штраф начислен при отсутствии подтверждённого отказа: "
+                    f"претензия от {claim_on:%d.%m.%Y} исполнена {satisfied:%d.%m.%Y} "
+                    "— в десятидневный срок (ЗоЗПП, ст. 22)"
+                ),
+                section=section_name,
+            )
+        )
+        return
 
 
 def verify_draft(
@@ -679,6 +769,8 @@ def verify_draft(
                         section=section.name,
                     )
                 )
+
+            _check_penalty_basis(text, pack, report, section.name)
 
         # ── 5. Раздел не удалось сгенерировать ─────────────────────
         if section.error:
