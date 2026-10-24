@@ -355,8 +355,19 @@ async def get_job(job_id: uuid.UUID) -> dict[str, object]:
 
 @router.get("/cases/{case_id}/draft", response_model=DraftOut | None)
 async def get_draft(case_id: uuid.UUID, session: SessionDep) -> DraftOut | None:
-    """GET /api/cases/{id}/draft — последняя версия проекта."""
+    """GET /api/cases/{id}/draft — последняя версия проекта.
+
+    Неизвестное дело — 404: раньше молчаливый null не давал отличить
+    «проекта ещё нет» от опечатки в идентификаторе. Для существующего
+    дела без проекта null остаётся — на нём держится «Проект не
+    сформирован» в интерфейсе.
+    """
     service = DraftService(session)
+    case = await service.cases.get(case_id)
+    if case is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Дело не найдено"
+        )
     draft = await service.get_draft_for_case(case_id)
     if draft is None:
         return None
@@ -375,6 +386,11 @@ async def list_versions(case_id: uuid.UUID, session: SessionDep) -> DraftListOut
     видеть документ в том виде, в каком он был принят.
     """
     service = DraftService(session)
+    case = await service.cases.get(case_id)
+    if case is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Дело не найдено"
+        )
     draft = await service.get_draft_for_case(case_id)
     if draft is None:
         raise HTTPException(
@@ -439,6 +455,11 @@ async def get_evidence(
     документов построен каждый раздел.
     """
     service = DraftService(session)
+    case = await service.cases.get(case_id)
+    if case is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Дело не найдено"
+        )
     items = await service.list_evidence(case_id, category=category, limit=limit)
     return EvidencePackOut(
         case_id=case_id,

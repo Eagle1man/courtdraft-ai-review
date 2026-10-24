@@ -479,17 +479,22 @@ async def api_client(tmp_path: Path) -> AsyncIterator[AsyncClient]:
 
 class TestDraftEndpoints:
     async def test_get_draft_returns_none_without_draft(self, api_client: AsyncClient) -> None:
-        """По делу без проекта должен быть 200 и null, а не 404.
+        """По существующему делу без проекта — 200 и null, а не 404.
 
-        Клиенту нужно отличать «проекта ещё нет» от «дела нет».
+        Клиент отличает «проекта ещё нет» (200 + null) от «дела нет»
+        (404 — см. TestUnknownCaseContract).
         """
-        response = await api_client.get(f"/api/cases/{uuid.uuid4()}/draft")
+        case_id = await _make_case_with_documents(api_client)
+        response = await api_client.get(f"/api/cases/{case_id}/draft")
         assert response.status_code == 200
+        assert response.json() is None
 
     async def test_versions_without_draft_is_404(self, api_client: AsyncClient) -> None:
         """Список версий без проекта — явная ошибка: просить нечего."""
-        response = await api_client.get(f"/api/cases/{uuid.uuid4()}/draft/versions")
+        case_id = await _make_case_with_documents(api_client)
+        response = await api_client.get(f"/api/cases/{case_id}/draft/versions")
         assert response.status_code == 404
+        assert "нет проекта" in response.json()["detail"]
 
     async def test_unknown_job_is_404(self, api_client: AsyncClient) -> None:
         response = await api_client.get(f"/api/jobs/{uuid.uuid4()}")
@@ -872,6 +877,29 @@ class TestWaitResponseVerification:
         assert reread["verification"] is not None
         reread_reasons = [i["reason"] for i in reread["verification"]["issues"]]
         assert reread_reasons == ["объект Issue должен дойти до ответа"]
+
+
+class TestUnknownCaseContract:
+    """Неизвестное дело — 404, а не пустой ответ.
+
+    Регрессия: GET /draft по несуществующему UUID возвращал 200 + null —
+    «проекта ещё нет» нельзя было отличить от опечатки в идентификаторе.
+    Для существующего дела без проекта null остаётся: на нём держится
+    экран «Проект не сформирован».
+    """
+
+    async def test_case_scoped_draft_routes_404_for_unknown_case(
+        self, api_client: AsyncClient
+    ) -> None:
+        unknown = "00000000-0000-0000-0000-000000000000"
+        for path in (
+            f"/api/cases/{unknown}/draft",
+            f"/api/cases/{unknown}/draft/versions",
+            f"/api/cases/{unknown}/evidence",
+        ):
+            response = await api_client.get(path)
+            assert response.status_code == 404, f"{path}: {response.status_code}"
+            assert response.json()["detail"] == "Дело не найдено"
 
 
 # ── Согласованность перечислений ──────────────────────────────────────
