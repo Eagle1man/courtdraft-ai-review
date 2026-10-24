@@ -213,6 +213,149 @@ def _no_shares(text: str, meta: Mapping[str, Any]) -> list[Defect]:
     return out
 
 
+# ── Пачка 3: форма и сроки ────────────────────────────────────────────────
+
+
+def _no_appeal(text: str, meta: Mapping[str, Any]) -> list[Defect]:
+    """Проверки 7: в резолютивной части нет порядка и срока обжалования."""
+    if re.search(r"обжалован", text, re.I):
+        return []
+    return [Defect("RESOL_NO_APPEAL", "HIGH", "", "не указан порядок и срок обжалования")]
+
+
+def _no_motivated(text: str, meta: Mapping[str, Any]) -> list[Defect]:
+    """Проверки 8: указан мировой судья, но нет блока 3/15 дней (ч. 4 ст. 199 ГПК)."""
+    if not re.search(r"миров\w*\s+судь", text, re.I):
+        return []
+    have_all = (
+        re.search(r"мотивированн", text, re.I)
+        and re.search(r"тр[её]х\s+дней", text, re.I)
+        and re.search(r"пятнадцати", text, re.I)
+    )
+    if have_all:
+        return []
+    return [
+        Defect(
+            "RESOL_NO_MOTIVATED",
+            "MEDIUM",
+            "",
+            "нет блока о подаче заявления о мотивированном решении (3/15 дней)",
+        )
+    ]
+
+
+def _no_immediate(text: str, meta: Mapping[str, Any]) -> list[Defect]:
+    """Проверки 11: решения по ст. 211 ГПК без фразы о немедленном исполнении."""
+    if re.search(r"немедленному исполнению", text, re.I):
+        return []
+    for s in sentences(text):
+        is_alimony = re.search(r"алимент", s, re.I)
+        is_wage = bool(
+            re.search(r"заработн\w*\s+плат", s, re.I)
+            and re.search(r"за\s+три\s+месяца|тр[её]х\s+месяцев", s, re.I)
+        )
+        is_reinstate = bool(
+            re.search(r"восстанов", s, re.I) and re.search(r"на\s+работ", s, re.I)
+        )
+        if is_alimony or is_wage or is_reinstate:
+            return [
+                Defect(
+                    "RESOL_NO_IMMEDIATE",
+                    "HIGH",
+                    s[:120],
+                    "решение по ст. 211 ГПК без указания на немедленное исполнение",
+                )
+            ]
+    return []
+
+
+def _no_deadline(text: str, meta: Mapping[str, Any]) -> list[Defect]:
+    """Проверки 13: обязательство без срока (дата в договоре сроком не считается)."""
+    out: list[Defect] = []
+    for s in sentences(text):
+        if not re.search(r"обязать", s, re.I):
+            continue
+        has_term = re.search(
+            r"немедленн|в\s+течение[^.!?]*(?:дн\w*|дес\w*|мес\w*|год)|до\s+\d{2}\.\d{2}\.\d{4}",
+            s,
+            re.I,
+        )
+        if not has_term:
+            out.append(Defect("RESOL_NO_DEADLINE", "MEDIUM", s[:120], "не указан срок исполнения"))
+    return out
+
+
+def _no_property_value(text: str, meta: Mapping[str, Any]) -> list[Defect]:
+    """Проверки 12: обязать передать/изъять имущество без указания его стоимости."""
+    out: list[Defect] = []
+    for s in sentences(text):
+        if not re.search(r"обязать", s, re.I) or not re.search(r"передать|изъять", s, re.I):
+            continue
+        if not re.search(r"стоимост", s, re.I):
+            out.append(
+                Defect(
+                    "RESOL_NO_PROPERTY_VALUE",
+                    "MEDIUM",
+                    s[:120],
+                    "не указана стоимость передаваемого (изымаемого) имущества",
+                )
+            )
+    return out
+
+
+def _zaochno_no_otmena(text: str, meta: Mapping[str, Any]) -> list[Defect]:
+    """Проверки 19: заочное решение без блока об отмене (7 дней со дня вручения)."""
+    if not meta.get("default_judgment"):
+        return []
+    for s in sentences(text):
+        if not re.search(r"отмен", s, re.I):
+            continue
+        if re.search(r"семь|семи|\b7\b", s, re.I) and re.search(r"вручен", s, re.I):
+            return []
+    return [
+        Defect(
+            "RESOL_ZAOCHNO_NO_OTMENA_ORDER",
+            "HIGH",
+            "",
+            "нет блока о праве ответчика на отмену заочного решения в семидневный срок",
+        )
+    ]
+
+
+def _alimony_indexation(text: str, meta: Mapping[str, Any]) -> list[Defect]:
+    """Проверки 20: алименты в твёрдой сумме без порядка индексации (п. 1 ст. 117 СК)."""
+    if not re.search(r"алимент", text, re.I) or not re.search(r"тв[её]рд", text, re.I):
+        return []
+    if re.search(r"индексац", text, re.I):
+        return []
+    return [
+        Defect(
+            "RESOL_ALIMONY_NO_INDEXATION",
+            "HIGH",
+            "",
+            "алименты в твёрдой сумме без порядка их индексации",
+        )
+    ]
+
+
+def _alimony_period(text: str, meta: Mapping[str, Any]) -> list[Defect]:
+    """Проверки 21: не указан период алиментов — начиная с чего и до какого срока."""
+    if not re.search(r"алимент", text, re.I):
+        return []
+    start = re.search(r"начиная\s+с|с\s+момента\s+обращения|с\s+момента\s+подачи", text, re.I)
+    end = re.search(r"до\s+совершеннолетия|до\s+достижения", text, re.I)
+    if start and end:
+        return []
+    return [
+        Defect(
+            "RESOL_ALIMONY_NO_PERIOD",
+            "HIGH",
+            "",
+            "не указан период: начиная с какого момента и до какого срока",
+        )
+    ]
+
+
 RULES: list[Rule] = [
     _no_costs,
     _costs_merged,
@@ -222,6 +365,14 @@ RULES: list[Rule] = [
     _no_whom,
     _no_id,
     _no_shares,
+    _no_appeal,
+    _no_motivated,
+    _no_immediate,
+    _no_deadline,
+    _no_property_value,
+    _zaochno_no_otmena,
+    _alimony_indexation,
+    _alimony_period,
 ]
 
 
