@@ -11,7 +11,10 @@ from __future__ import annotations
 import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from datetime import date
 from typing import Any
+
+from app.verification.laws import state_fee
 
 # Разбивка только перед заглавной буквой: «…2 000,00 руб. и расходов на …» — одно предложение.
 _SPLIT = re.compile(r"(?<=[.!?])\s+(?=[«А-ЯЁ])")
@@ -462,6 +465,52 @@ def _motivation_in_operative(text: str, meta: Mapping[str, Any]) -> list[Defect]
     return out
 
 
+# ── Пачка 5: пошлина по материалам дела ───────────────────────────────────
+#: Допуск в рубль — тот же, что у сверки пошлины в engine.py.
+_FEE_TOLERANCE = 1.0
+#: Даты-представители редакций: определяют, чьей сеткой уплачена пошлина.
+_FEE_EDITIONS: tuple[tuple[str, date], ...] = (
+    ("редакцией до 29.01.2010", date(2005, 1, 1)),
+    ("редакцией от 29.01.2010 до 08.09.2024", date(2020, 1, 1)),
+    ("редакцией с 09.09.2024", date(2025, 1, 1)),
+)
+
+
+def _wrong_fee_edition(text: str, meta: Mapping[str, Any]) -> list[Defect]:
+    """Проверки 22: пошлина уплачена по редакции ст. 333.19, не действовавшей на дату подачи.
+
+    Метаданные обязательны: без даты подачи, цены иска и уплаченной суммы
+    проверка молчит. Расхождение, не сходящееся ни с одной редакцией, — это
+    арифметика, а не неверная редакция, и оно тоже молчит.
+    """
+    claim_date = meta.get("claim_date")
+    claim_price = meta.get("claim_price")
+    paid = meta.get("paid_fee")
+    if not claim_date or claim_price is None or paid is None:
+        return []
+    try:
+        on = date.fromisoformat(str(claim_date)[:10])
+        price = float(claim_price)
+        paid_fee = float(paid)
+    except (TypeError, ValueError):
+        return []
+    expected = state_fee(price, on)
+    if abs(expected - paid_fee) <= _FEE_TOLERANCE:
+        return []
+    for label, moment in _FEE_EDITIONS:
+        if abs(state_fee(price, moment) - paid_fee) <= _FEE_TOLERANCE:
+            return [
+                Defect(
+                    "RESOL_WRONG_FEE_EDITION",
+                    "HIGH",
+                    f"{paid_fee:.2f} руб. при цене иска {price:.2f} руб. на {on.isoformat()}",
+                    f"сумма сходится с {label}, но на дату подачи действовала другая "
+                    f"(расчёт {expected:.2f} руб.)",
+                )
+            ]
+    return []
+
+
 RULES: list[Rule] = [
     _no_costs,
     _costs_merged,
@@ -484,6 +533,7 @@ RULES: list[Rule] = [
     _proportion_reduced,
     _fee_from_exempt,
     _motivation_in_operative,
+    _wrong_fee_edition,
 ]
 
 
