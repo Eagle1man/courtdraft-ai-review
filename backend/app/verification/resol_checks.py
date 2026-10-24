@@ -134,12 +134,94 @@ def _fully_partially(text: str, meta: Mapping[str, Any]) -> list[Defect]:
 
 Rule = Callable[[str, Mapping[str, Any]], list[Defect]]
 
+# ── Пачка 2: стороны ───────────────────────────────────────────────────────
+_PARTY_ORG = r"(?:ООО|АО|ПАО|ЗАО|ГУП|МУП)\s+«[^»]+»"
+_PARTY_IP = r"ИП\s+[А-ЯЁ][а-яё-]+(?:\s+[А-ЯЁ][а-яё-]+){0,2}"
+_PARTY_NAME = r"[А-ЯЁ][а-яё-]+\s+[А-ЯЁ][а-яё-]+(?:\s+[А-ЯЁ][а-яё-]+){1,2}"
+_PARTY = rf"(?:{_PARTY_ORG}|{_PARTY_IP}|{_PARTY_NAME})"
+_RECIPIENT = re.compile(rf"в пользу\s+({_PARTY})")
+_DEBTOR = re.compile(rf"взыскать\s+с\s+({_PARTY})", re.I)
+_ID = re.compile(r"ИНН|СНИЛС|паспорт|водительск|ОГРН", re.I)
+_SIDE_STOP = re.compile(r"\s+в\s+|\s+и\s+|\s+доход\b|[,.;]")
+_COSTS = re.compile(r"пошлин|расход|издержк|бюджет", re.I)
+
+
+def _window(s: str, start: int) -> str:
+    """Текст между концом имени стороны и ближайшим концом этой конструкции."""
+    m = _SIDE_STOP.search(s, start)
+    return s[start : m.start()] if m else s[start:]
+
+
+def _no_whom(text: str, meta: Mapping[str, Any]) -> list[Defect]:
+    """Проверки 6: взыскание без указания, с кого и в чью пользу."""
+    out: list[Defect] = []
+    for s in sentences(text):
+        if not _VYSK.search(s) or _COSTS.search(s):
+            continue
+        if _RECIPIENT.search(s) or re.search(r"в\s+доход\b|\bс\s+[«А-ЯЁ]", s):
+            continue
+        out.append(
+            Defect("RESOL_NO_WHOM", "HIGH", s[:120], "не указано, с кого и в чью пользу взыскание")
+        )
+    return out
+
+
+def _no_id(text: str, meta: Mapping[str, Any]) -> list[Defect]:
+    """Проверки 9: у стороны рядом с именем нет идентификатора.
+
+    Лица с «года рождения» сторонами не считаются: в тексте они встречаются
+    не после «с» и не после «в пользу».
+    """
+    out: list[Defect] = []
+    for s in sentences(text):
+        for pattern in (_DEBTOR, _RECIPIENT):
+            for m in pattern.finditer(s):
+                party = m.group(1)
+                if _ID.search(_window(s, m.end())):
+                    continue
+                out.append(
+                    Defect(
+                        "RESOL_NO_ID",
+                        "MEDIUM",
+                        party,
+                        "у стороны рядом с именем нет ИНН/СНИЛС/паспорта",
+                    )
+                )
+    return out
+
+
+def _no_shares(text: str, meta: Mapping[str, Any]) -> list[Defect]:
+    """Проверки 10: несколько ответчиков в одном взыскании без долей и без солидарности."""
+    out: list[Defect] = []
+    for s in sentences(text):
+        if not _VYSK.search(s) or re.search(r"солидарн", s, re.I):
+            continue
+        m = _DEBTOR.search(s)
+        if not m:
+            continue
+        seg = s[m.start() :]
+        seg = re.split(r" в пользу | в доход ", seg, maxsplit=1)[0]
+        if re.search(r"\sи\s", seg) and not re.search(r"дол|1/\d", seg):
+            out.append(
+                Defect(
+                    "RESOL_NO_SHARES",
+                    "HIGH",
+                    seg[:120],
+                    "несколько ответчиков без солидарной ответственности или долей",
+                )
+            )
+    return out
+
+
 RULES: list[Rule] = [
     _no_costs,
     _costs_merged,
     _total_mismatch,
     _no_amount,
     _fully_partially,
+    _no_whom,
+    _no_id,
+    _no_shares,
 ]
 
 
