@@ -356,6 +356,110 @@ def _alimony_period(text: str, meta: Mapping[str, Any]) -> list[Defect]:
     ]
 
 
+# ── Пачка 4: пропорция, льготы, мотивировка ───────────────────────────────
+_MOTIVATION_MARKERS = re.compile(
+    r"поскольку|так\s+как|в\s+связи\s+с\s+тем,\s+что|исходя\s+из",
+    re.I,
+)
+# В должнике бывает указан идентификатор — «(СНИЛС: …)», его надо отбросить.
+_FEE_ID = re.compile(r"\s*\([^)]*\)\s*$")
+_FEE_FROM = re.compile(
+    r"взыскать\s+с\s+(.*?)(?:\s+в\s+доход|\s+в\s+пользу|\s+государственную\s+пошлину|\s+расход)",
+    re.I,
+)
+
+
+def _no_consumer_fine(text: str, meta: Mapping[str, Any]) -> list[Defect]:
+    """Проверки 14: потребительский спор без штрафа (п. 6 ст. 13 ЗоЗПП)."""
+    if not meta.get("consumer_case"):
+        return []
+    if not re.search(r"товар|услуг", text, re.I) or "в пользу" not in text:
+        return []
+    if re.search(r"штраф", text, re.I):
+        return []
+    return [
+        Defect(
+            "RESOL_NO_CONSUMER_FINE",
+            "HIGH",
+            "",
+            "по делу о правах потребителя не взыскан штраф по п. 6 ст. 13 ЗоЗПП",
+        )
+    ]
+
+
+def _proportion_non_property(text: str, meta: Mapping[str, Any]) -> list[Defect]:
+    """Проверки 15: пропорциональное деление взято по неимущественным требованиям."""
+    if not re.search(r"пропорциональн", text, re.I):
+        return []
+    if not re.search(r"моральн", text, re.I) or not re.search(r"вред", text, re.I):
+        return []
+    return [
+        Defect(
+            "RESOL_PROPORTION_NON_PROPERTY",
+            "HIGH",
+            "",
+            "пропорциональное деление применено к моральному вреду (неимущественному требованию)",
+        )
+    ]
+
+
+def _proportion_reduced(text: str, meta: Mapping[str, Any]) -> list[Defect]:
+    """Проверки 16: пропорциональность взята по мотиву снижения по ст. 333 ГК РФ."""
+    if not re.search(r"пропорциональн", text, re.I):
+        return []
+    if not re.search(r"ст\.\s*333|333\s+ГК", text, re.I):
+        return []
+    return [
+        Defect(
+            "RESOL_PROPORTION_REDUCED",
+            "HIGH",
+            "",
+            "пропорция отнесена к снижению неустойки по ст. 333 ГК РФ",
+        )
+    ]
+
+
+def _fee_from_exempt(text: str, meta: Mapping[str, Any]) -> list[Defect]:
+    """Проверки 17: пошлина взыскана с льготного истца (ст. 333.36 НК РФ)."""
+    if not meta.get("claimant_exempt"):
+        return []
+    recipients = {m.group(1).strip() for m in _RECIPIENT.finditer(text)}
+    out: list[Defect] = []
+    for s in sentences(text):
+        if not _VYSK.search(s) or not re.search(r"пошлин", s, re.I):
+            continue
+        m = _FEE_FROM.search(s)
+        debtor = _FEE_ID.sub("", m.group(1)).strip() if m else ""
+        if debtor and debtor in recipients:
+            out.append(
+                Defect(
+                    "RESOL_FEE_FROM_EXEMPT",
+                    "HIGH",
+                    s[:120],
+                    "госпошлина взыскана с истца, имеющего льготу по ст. 333.36 НК РФ",
+                )
+            )
+    return out
+
+
+def _motivation_in_operative(text: str, meta: Mapping[str, Any]) -> list[Defect]:
+    """Проверки 18: в резолютивную часть перенесена мотивировка (ч. 4 ст. 198 ГПК)."""
+    out: list[Defect] = []
+    for s in sentences(text):
+        if not _VYSK.search(s):
+            continue
+        if _MOTIVATION_MARKERS.search(s):
+            out.append(
+                Defect(
+                    "RESOL_MOTIVATION_IN_OPERATIVE",
+                    "MEDIUM",
+                    s[:120],
+                    "мотивировка в резолютивной части",
+                )
+            )
+    return out
+
+
 RULES: list[Rule] = [
     _no_costs,
     _costs_merged,
@@ -373,6 +477,11 @@ RULES: list[Rule] = [
     _zaochno_no_otmena,
     _alimony_indexation,
     _alimony_period,
+    _no_consumer_fine,
+    _proportion_non_property,
+    _proportion_reduced,
+    _fee_from_exempt,
+    _motivation_in_operative,
 ]
 
 
