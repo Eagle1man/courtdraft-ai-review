@@ -201,7 +201,9 @@ def _no_shares(text: str, meta: Mapping[str, Any]) -> list[Defect]:
             continue
         seg = s[m.start() :]
         seg = re.split(r" в пользу | в доход ", seg, maxsplit=1)[0]
-        if re.search(r"\sи\s", seg) and not re.search(r"дол|1/\d", seg):
+        # «и» внутри названия (ООО «Кузьмин и партнёры») соединением сторон не является.
+        seg = re.sub(r"«[^»]*»", "", seg)
+        if re.search(r"\sи\s+[«А-ЯЁ]", seg) and not re.search(r"дол|1/\d", seg):
             out.append(
                 Defect(
                     "RESOL_NO_SHARES",
