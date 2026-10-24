@@ -22,6 +22,7 @@ from dataclasses import dataclass, field
 from datetime import date
 from enum import StrEnum
 from pathlib import Path
+from typing import Any
 
 from app.agents.draft_agent import NEEDS_REVIEW, DraftResult
 from app.agents.evidence_pack import MONTHS, EvidenceItem, EvidencePack
@@ -37,6 +38,7 @@ from app.verification.jurisdiction import check_jurisdiction
 from app.verification.laws import LawRegistry, extract_fee, fee_matches, state_fee
 from app.verification.persons import PersonFinding, RoleFinding, check_section
 from app.verification.qualification import check_qualification
+from app.verification.resol_checks import check_resolution
 from app.verification.subject_of_proof import ProofFact, subject_of_proof
 
 
@@ -68,6 +70,30 @@ class IssueType(StrEnum):
     CLAIM_AMOUNT_UNPARSED = "CLAIM_AMOUNT_UNPARSED"
     CITATION_DANGLING = "CITATION_DANGLING"
     PENALTY_BASIS_UNCONFIRMED = "PENALTY_BASIS_UNCONFIRMED"
+    # Проверки резолютивной части (app/verification/resol_checks.py):
+    # имена значений совпадают с id срабатываний датасета фикстур.
+    RESOL_NO_COSTS = "RESOL_NO_COSTS"
+    RESOL_COSTS_MERGED = "RESOL_COSTS_MERGED"
+    RESOL_TOTAL_MISMATCH = "RESOL_TOTAL_MISMATCH"
+    RESOL_NO_AMOUNT = "RESOL_NO_AMOUNT"
+    RESOL_FULLY_PARTIALLY = "RESOL_FULLY_PARTIALLY"
+    RESOL_NO_WHOM = "RESOL_NO_WHOM"
+    RESOL_NO_ID = "RESOL_NO_ID"
+    RESOL_NO_SHARES = "RESOL_NO_SHARES"
+    RESOL_NO_APPEAL = "RESOL_NO_APPEAL"
+    RESOL_NO_MOTIVATED = "RESOL_NO_MOTIVATED"
+    RESOL_NO_IMMEDIATE = "RESOL_NO_IMMEDIATE"
+    RESOL_NO_DEADLINE = "RESOL_NO_DEADLINE"
+    RESOL_NO_PROPERTY_VALUE = "RESOL_NO_PROPERTY_VALUE"
+    RESOL_ZAOCHNO_NO_OTMENA_ORDER = "RESOL_ZAOCHNO_NO_OTMENA_ORDER"
+    RESOL_ALIMONY_NO_INDEXATION = "RESOL_ALIMONY_NO_INDEXATION"
+    RESOL_ALIMONY_NO_PERIOD = "RESOL_ALIMONY_NO_PERIOD"
+    RESOL_NO_CONSUMER_FINE = "RESOL_NO_CONSUMER_FINE"
+    RESOL_PROPORTION_NON_PROPERTY = "RESOL_PROPORTION_NON_PROPERTY"
+    RESOL_PROPORTION_REDUCED = "RESOL_PROPORTION_REDUCED"
+    RESOL_FEE_FROM_EXEMPT = "RESOL_FEE_FROM_EXEMPT"
+    RESOL_MOTIVATION_IN_OPERATIVE = "RESOL_MOTIVATION_IN_OPERATIVE"
+    RESOL_WRONG_FEE_EDITION = "RESOL_WRONG_FEE_EDITION"
 
 
 class Severity(StrEnum):
@@ -362,6 +388,26 @@ def _parse_ru_date(raw: str) -> date | None:
         return date(year, month, day)
     except ValueError:
         return None
+
+
+def _resol_meta(
+    pack: EvidencePack, stated: float | None, claim_total: float
+) -> dict[str, Any]:
+    """Метаданные для проверок резолютивной — только то, что видно в материалах.
+
+    Неизвестное остаётся ложным: правило без метаданных молчит, а не угадывает.
+    Льгота пошлины (claimant_exempt) в материалах дела не читается — пока False,
+    и проверка FEE_FROM_EXEMPT молчит до тех пор, пока льгота не станет явью.
+    """
+    category = (pack.category or "").lower()
+    return {
+        "claim_date": _case_date(pack.dates),
+        "claim_price": claim_total,
+        "paid_fee": stated,
+        "consumer_case": "потребител" in category,
+        "claimant_exempt": False,
+        "default_judgment": "заочн" in category,
+    }
 
 
 def _check_penalty_basis(
@@ -771,6 +817,19 @@ def verify_draft(
                 )
 
             _check_penalty_basis(text, pack, report, section.name)
+
+            # Проверки резолютивной части: 22 текстовых правила, каждое
+            # покрыто фикстурами (tests/data/resol_fixtures.json).
+            for defect in check_resolution(text, _resol_meta(pack, stated, claim_total)):
+                report.issues.append(
+                    Issue(
+                        type=IssueType[defect.id],
+                        severity=Severity(defect.severity),
+                        text=defect.fragment or text[:200],
+                        reason=defect.reason,
+                        section=section.name,
+                    )
+                )
 
         # ── 5. Раздел не удалось сгенерировать ─────────────────────
         if section.error:
